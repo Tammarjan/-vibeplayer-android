@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import org.json.JSONArray
@@ -64,7 +65,7 @@ class MainActivity : AppCompatActivity() {
     private var feedScroll: ScrollView? = null
     private val feedFrames = linkedMapOf<Long, FrameLayout>()
     private var previewId: Long? = null
-    private val ioExecutor = Executors.newFixedThreadPool(3)
+    private val ioExecutor = Executors.newFixedThreadPool(2)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var previewUpdate: Runnable? = null
     private val thumbnailViews = linkedMapOf<Long, ImageView>()
@@ -226,7 +227,7 @@ class MainActivity : AppCompatActivity() {
         thumbnailViews[video.id] = image
         ioExecutor.execute {
             try {
-                val bitmap = if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(video.uri, Size(640, 640), null)
+                val bitmap = if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(video.uri, Size(320, 180), null)
                 else ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
                 mainHandler.post {
                     if (image.tag == video.id && !isFinishing) image.setImageBitmap(bitmap)
@@ -551,7 +552,7 @@ class MainActivity : AppCompatActivity() {
         ioExecutor.execute {
             try {
                 val bitmap = if (Build.VERSION.SDK_INT >= 29) {
-                    contentResolver.loadThumbnail(video.uri, Size(320, 200), null)
+                    contentResolver.loadThumbnail(video.uri, Size(240, 135), null)
                 } else {
                     @Suppress("DEPRECATION")
                     ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", MediaStore.Video.Thumbnails.MINI_KIND)
@@ -656,13 +657,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun ensurePlayer() {
         if (player != null) return
-        player = ExoPlayer.Builder(this).build().also { exo ->
+        val renderersFactory = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        player = ExoPlayer.Builder(this, renderersFactory).build().also { exo ->
             playerView.player = exo
             exo.addListener(object : Player.Listener {
                 override fun onAudioSessionIdChanged(audioSessionId: Int) { attachEqualizer(audioSessionId) }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     mainHandler.post {
-                        Toast.makeText(this@MainActivity, "Cannot play this video: ${error.errorCodeName}", Toast.LENGTH_LONG).show()
+                        player?.playWhenReady = false
+                        saveCurrentPosition()
+                        Toast.makeText(this@MainActivity, "Playback stopped: ${error.errorCodeName}. Try another video or format.", Toast.LENGTH_LONG).show()
                     }
                 }
             })
