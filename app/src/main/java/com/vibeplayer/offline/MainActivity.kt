@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity() {
             setHintTextColor(0xFF64748B.toInt())
             setTextColor(0xFFF8FAFC.toInt())
             textSize = 14f
-            singleLine = true
+            isSingleLine = true
             setPadding(dp(14), 0, dp(14), 0)
             setBackgroundColor(0xFF171722.toInt())
             addTextChangedListener(object : android.text.TextWatcher {
