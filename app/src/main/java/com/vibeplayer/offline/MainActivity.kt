@@ -349,7 +349,9 @@ class MainActivity : AppCompatActivity() {
         details.addView(label("Comments", 18, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(16), 0, dp(8)) })
         details.addView(label("Comments are for your local viewing notes. This video is stored on your device.", 13, 0xFF9CA3AF.toInt()).apply { setPadding(dp(12), dp(14), dp(12), dp(14)); setBackgroundColor(0xFF171722.toInt()) })
         details.addView(label("Up next", 19, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(18), 0, dp(8)) })
-        videos.filter { it.id != video.id }.take(20).forEach { related -> details.addView(videoRow(related)) }
+        videos.filter { it.id != video.id }.take(20).forEach { related ->
+            details.addView(videoRow(related, onVideoClick = { openFullPlayer(related) }))
+        }
         scroll.addView(details)
         page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         val back = TextView(this).apply { text = "‹"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(-1); setBackgroundColor(0x99000000.toInt()); setOnClickListener { closeWatchPage() } }
@@ -509,23 +511,23 @@ class MainActivity : AppCompatActivity() {
         if (items.isEmpty()) list.addView(message("This collection is empty. Add videos from the Library menu."))
     }
 
-    private fun videoRow(video: LocalVideo): View {
+    private fun videoRow(video: LocalVideo, onVideoClick: (() -> Unit)? = null): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(9), dp(5), dp(9))
             setBackgroundColor(0xFF13131D.toInt())
             isClickable = true
-            setOnClickListener { playVideo(video) }
+            setOnClickListener { (onVideoClick ?: { openFullPlayer(video) }).invoke() }
         }
-        val thumb = TextView(this).apply {
-            text = "▶"
-            textSize = 19f
-            gravity = Gravity.CENTER
-            setTextColor(0xFFB79CFF.toInt())
+        val thumb = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(0xFF28223B.toInt())
+            contentDescription = "Thumbnail: ${video.title}"
+            tag = video.id
         }
-        row.addView(thumb, LinearLayout.LayoutParams(dp(58), dp(48)))
+        row.addView(thumb, LinearLayout.LayoutParams(dp(112), dp(72)))
+        loadRowThumbnail(thumb, video)
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), 0, dp(4), 0) }
         details.addView(label(video.title, 14, 0xFFF1F5F9.toInt(), true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END })
         details.addView(label("${video.folder}  •  ${formatDuration(video.durationMs)}  •  ${formatSize(video.sizeBytes)}", 10, 0xFF94A3B8.toInt()))
@@ -537,11 +539,36 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFFCBD5E1.toInt())
             setOnClickListener { showVideoMenu(this, video) }
         }
-        row.addView(menu, LinearLayout.LayoutParams(dp(38), dp(48)))
+        row.addView(menu, LinearLayout.LayoutParams(dp(38), dp(72)))
         return row.apply {
             val lp = LinearLayout.LayoutParams(-1, -2)
             lp.bottomMargin = dp(6)
             layoutParams = lp
+        }
+    }
+
+    private fun loadRowThumbnail(image: ImageView, video: LocalVideo) {
+        ioExecutor.execute {
+            try {
+                val bitmap = if (Build.VERSION.SDK_INT >= 29) {
+                    contentResolver.loadThumbnail(video.uri, Size(320, 200), null)
+                } else {
+                    @Suppress("DEPRECATION")
+                    ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", MediaStore.Video.Thumbnails.MINI_KIND)
+                }
+                mainHandler.post {
+                    if (!isFinishing && !isDestroyed && image.tag == video.id && bitmap != null) {
+                        image.setImageBitmap(bitmap)
+                    }
+                }
+            } catch (_: Exception) {
+                mainHandler.post {
+                    if (!isFinishing && !isDestroyed && image.tag == video.id) {
+                        image.setImageResource(android.R.drawable.ic_media_play)
+                        image.scaleType = ImageView.ScaleType.CENTER
+                    }
+                }
+            }
         }
     }
 
@@ -633,19 +660,21 @@ class MainActivity : AppCompatActivity() {
             playerView.player = exo
             exo.addListener(object : Player.Listener {
                 override fun onAudioSessionIdChanged(audioSessionId: Int) { attachEqualizer(audioSessionId) }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    mainHandler.post {
+                        Toast.makeText(this@MainActivity, "Cannot play this video: ${error.errorCodeName}", Toast.LENGTH_LONG).show()
+                    }
+                }
             })
         }
     }
 
     private fun playVideo(video: LocalVideo) {
-        ensurePlayer()
-        currentVideo = video
-        player?.apply {
-            setMediaItem(MediaItem.fromUri(video.uri))
-            prepare()
-            playWhenReady = true
+        if (watchPageMode || shortsMode) {
+            if (video.isPortrait) openShortsPlayer(video) else openFullPlayer(video)
+            return
         }
-        nowPlayingText.text = "Now playing  •  ${video.title}"
+        openFullPlayer(video)
     }
 
     private fun playCollection(items: List<LocalVideo>) {
