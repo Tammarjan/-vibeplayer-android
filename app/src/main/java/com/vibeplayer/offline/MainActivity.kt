@@ -54,6 +54,8 @@ class MainActivity : AppCompatActivity() {
     private var activeVideos: List<LocalVideo> = emptyList()
     private var currentTab = "Home"
     private var fullScreen = false
+    private var shortsMode = false
+    private var watchPageMode = false
     private var currentVideo: LocalVideo? = null
     private val playlists = linkedMapOf<String, MutableSet<Long>>()
     private val likedIds = linkedSetOf<Long>()
@@ -235,11 +237,11 @@ class MainActivity : AppCompatActivity() {
         val ratio = if (short) 0.68f else 1.78f
         card.addView(frame, LinearLayout.LayoutParams(-1, if (short) dp(225) else (resources.displayMetrics.widthPixels / ratio).toInt()))
         feedFrames[video.id] = frame
-        frame.setOnClickListener { openFullPlayer(video) }
+        frame.setOnClickListener { if (short) openShortsPlayer(video) else openFullPlayer(video) }
         val title = label(video.title, 14, 0xFFF8FAFC.toInt(), true).apply {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(8), dp(7), dp(8), dp(2))
-            setOnClickListener { openFullPlayer(video) }
+            setOnClickListener { if (short) openShortsPlayer(video) else openFullPlayer(video) }
         }
         card.addView(title)
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), 0, dp(6), 0) }
@@ -290,13 +292,18 @@ class MainActivity : AppCompatActivity() {
         val pos = IntArray(2); getLocationOnScreen(pos); return pos[1]
     }
 
-    private fun openFullPlayer(video: LocalVideo) {
-        previewId = null
-        ensurePlayer()
+    private fun detachPlayerView() {
         (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
-        playerFrame.addView(playerView, 0, FrameLayout.LayoutParams(-1, -1))
-        playerFrame.visibility = View.VISIBLE
-        playerView.useController = true
+    }
+
+    private fun openFullPlayer(video: LocalVideo) {
+        saveCurrentPosition()
+        previewId = null
+        shortsMode = false
+        watchPageMode = true
+        fullScreen = false
+        currentVideo = video
+        ensurePlayer()
         player?.apply {
             volume = 1f
             repeatMode = Player.REPEAT_MODE_OFF
@@ -305,10 +312,98 @@ class MainActivity : AppCompatActivity() {
             seekTo(resumePositions[video.id] ?: 0L)
             playWhenReady = true
         }
+        playerView.useController = true
+        playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        showWatchPage(video)
+    }
+
+    private fun showWatchPage(video: LocalVideo) {
+        detachPlayerView()
+        playerFrame.removeAllViews()
+        playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        playerFrame.visibility = View.VISIBLE
+        root.removeAllViews()
+        root.setPadding(0, 0, 0, 0)
+        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF09090F.toInt()) }
+        val videoHeight = (resources.displayMetrics.widthPixels * 9f / 16f).toInt()
+        page.addView(playerFrame, LinearLayout.LayoutParams(-1, videoHeight))
+        val scroll = ScrollView(this)
+        val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(18)) }
+        details.addView(label(video.title, 19, 0xFFF8FAFC.toInt(), true))
+        details.addView(label(formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes), 12, 0xFF9CA3AF.toInt()).apply { setPadding(0, dp(7), 0, dp(12)) })
+        val channelRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        channelRow.addView(label("●", 24, 0xFFB79CFF.toInt(), true))
+        channelRow.addView(label("  Local videos  •  VibePlayer", 14, 0xFFE5E7EB.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        details.addView(channelRow)
+        val actions = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, dp(10)) }
+        val like = actionButton(if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like")
+        like.setOnClickListener { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections(); like.text = if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like" }
+        val later = actionButton(if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Watch later")
+        later.setOnClickListener { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections(); later.text = if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Watch later" }
+        val playlist = actionButton("＋ Playlist")
+        playlist.setOnClickListener { addToPlaylist(video) }
+        actions.addView(like, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(5) })
+        actions.addView(later, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(5) })
+        actions.addView(playlist, LinearLayout.LayoutParams(0, dp(44), 1f))
+        details.addView(actions)
+        details.addView(label("Comments", 18, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(16), 0, dp(8)) })
+        details.addView(label("Comments are for your local viewing notes. This video is stored on your device.", 13, 0xFF9CA3AF.toInt()).apply { setPadding(dp(12), dp(14), dp(12), dp(14)); setBackgroundColor(0xFF171722.toInt()) })
+        details.addView(label("Up next", 19, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(18), 0, dp(8)) })
+        videos.filter { it.id != video.id }.take(20).forEach { related -> details.addView(videoRow(related)) }
+        scroll.addView(details)
+        page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        val back = TextView(this).apply { text = "‹"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(-1); setBackgroundColor(0x99000000.toInt()); setOnClickListener { closeWatchPage() } }
+        playerFrame.addView(back, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.START or Gravity.TOP))
+        root.addView(page, LinearLayout.LayoutParams(-1, -1))
+    }
+
+    private fun openShortsPlayer(video: LocalVideo) {
+        saveCurrentPosition()
+        previewId = null
+        shortsMode = true
+        watchPageMode = false
+        fullScreen = true
         currentVideo = video
-        nowPlayingText.text = video.title
-        nowPlayingText.visibility = View.VISIBLE
-        playerFrame.bringToFront()
+        ensurePlayer()
+        player?.apply { volume = 1f; repeatMode = Player.REPEAT_MODE_ONE; setMediaItem(MediaItem.fromUri(video.uri)); prepare(); seekTo(resumePositions[video.id] ?: 0L); playWhenReady = true }
+        playerView.useController = true
+        playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        detachPlayerView()
+        playerFrame.removeAllViews()
+        playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        root.removeAllViews()
+        root.setPadding(0, 0, 0, 0)
+        root.addView(playerFrame, LinearLayout.LayoutParams(-1, -1))
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
+        val back = TextView(this).apply { text = "‹"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(-1); setBackgroundColor(0x66000000); setOnClickListener { closeWatchPage() } }
+        playerFrame.addView(back, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.START or Gravity.TOP))
+    }
+
+    private fun closeWatchPage() {
+        saveCurrentPosition()
+        player?.pause()
+        shortsMode = false; watchPageMode = false; fullScreen = false
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        detachPlayerView()
+        playerFrame.removeAllViews()
+        playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        root.removeAllViews()
+        root.setPadding(dp(14), dp(8), dp(14), 0)
+        root.addView(topHeader)
+        playerFrame.visibility = View.GONE
+        root.addView(playerFrame, LinearLayout.LayoutParams(-1, dp(218)))
+        nowPlayingText.visibility = View.GONE
+        root.addView(nowPlayingText)
+        root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(bottomNav, LinearLayout.LayoutParams(-1, dp(60)))
+        currentTab = "Home"
+        renderTab()
     }
 
     private fun loadSavedCollections() {
@@ -566,6 +661,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleFullscreen() {
+        if (shortsMode) return
         fullScreen = !fullScreen
         if (fullScreen) {
             topHeader.visibility = View.GONE
@@ -765,6 +861,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    @Deprecated("Deprecated in Android API")
+    override fun onBackPressed() {
+        if (watchPageMode || shortsMode) { closeWatchPage(); return }
+        super.onBackPressed()
+    }
 
     override fun onPause() {
         saveCurrentPosition()
