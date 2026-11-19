@@ -6,6 +6,10 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.media.audiofx.Equalizer
 import android.net.Uri
+import android.util.Size
+import android.graphics.BitmapFactory
+import android.media.ThumbnailUtils
+import android.provider.MediaStore as VideoStoreAlias
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -49,6 +53,12 @@ class MainActivity : AppCompatActivity() {
     private var fullScreen = false
     private var currentVideo: LocalVideo? = null
     private val playlists = linkedMapOf<String, MutableSet<Long>>()
+    private val likedIds = linkedSetOf<Long>()
+    private val watchLaterIds = linkedSetOf<Long>()
+    private val resumePositions = mutableMapOf<Long, Long>()
+    private var feedScroll: ScrollView? = null
+    private val feedFrames = linkedMapOf<Long, FrameLayout>()
+    private var previewId: Long? = null
     private val prefs by lazy { getSharedPreferences("vibe_library", MODE_PRIVATE) }
 
     private val permissionLauncher =
@@ -61,6 +71,7 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = 0xFF09090F.toInt()
         window.navigationBarColor = 0xFF09090F.toInt()
         loadPlaylists()
+        loadSavedCollections()
         buildScreen()
         ensurePermissionAndLoad()
     }
@@ -150,32 +161,173 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderHome() {
-        val heading = label("Up next for you", 20, 0xFFF8FAFC.toInt(), true)
-        content.addView(heading)
-        searchInput = EditText(this).apply {
-            hint = "Search videos on your device"
-            setHintTextColor(0xFF64748B.toInt())
-            setTextColor(0xFFF8FAFC.toInt())
-            textSize = 14f
-            isSingleLine = true
-            setPadding(dp(14), 0, dp(14), 0)
-            setBackgroundColor(0xFF171722.toInt())
-            addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    renderVideoRows(videos.filter { it.title.contains(s.toString(), true) })
-                }
-                override fun afterTextChanged(s: android.text.Editable?) {}
-            })
-        }
-        content.addView(searchInput, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(8); bottomMargin = dp(8) })
-        statusText = label("Your videos", 12, 0xFF94A3B8.toInt())
-        content.addView(statusText)
+        playerFrame.visibility = View.GONE
+        nowPlayingText.visibility = View.GONE
+        val titleBar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        titleBar.addView(label("Home", 23, 0xFFF8FAFC.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        val search = actionButton("⌕ Search")
+        search.setOnClickListener { showSearchDialog() }
+        titleBar.addView(search)
+        content.addView(titleBar)
         val scroll = ScrollView(this).apply { isFillViewport = true; overScrollMode = View.OVER_SCROLL_NEVER }
-        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; tag = "video_rows" }
-        scroll.addView(rows)
+        feedScroll = scroll
+        val feed = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll.addView(feed)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        renderVideoRows(videos)
+        feedFrames.clear()
+        val longVideos = videos.filter { !isPortraitVideo(it) }
+        val shorts = videos.filter { isPortraitVideo(it) }
+        feed.addView(label("Videos", 20, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(12), 0, dp(8)) })
+        if (longVideos.isEmpty()) feed.addView(message("No landscape videos found yet."))
+        longVideos.forEach { feed.addView(feedVideoCard(it, false)) }
+        feed.addView(label("Shorts", 22, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(18), 0, dp(10)) })
+        if (shorts.isEmpty()) feed.addView(message("Portrait videos will appear here as Shorts."))
+        shorts.chunked(2).forEach { pair ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
+            pair.forEach { row.addView(feedVideoCard(it, true), LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5) }) }
+            if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, dp(10), 1f))
+            feed.addView(row)
+        }
+        scroll.viewTreeObserver.addOnScrollChangedListener { updateAutoplayPreview() }
+        scroll.post { updateAutoplayPreview() }
+    }
+
+    private fun showSearchDialog() {
+        val input = EditText(this).apply { hint = "Search videos" }
+        AlertDialog.Builder(this).setTitle("Search your videos").setView(input)
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Search") { _, _ ->
+                showCollection("Search results", videos.filter { it.title.contains(input.text.toString(), true) })
+            }.show()
+    }
+
+    private fun isPortraitVideo(video: LocalVideo): Boolean {
+        return try {
+            val retriever = android.media.MediaMetadataRetriever()
+            retriever.setDataSource(this, video.uri)
+            val w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            retriever.release()
+            h > w
+        } catch (_: Exception) { false }
+    }
+
+    private fun feedVideoCard(video: LocalVideo, short: Boolean): View {
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, dp(10)) }
+        val frame = FrameLayout(this).apply { setBackgroundColor(0xFF191923.toInt()) }
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            try {
+                val bitmap = if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(video.uri, Size(640, 360), null)
+                else ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
+                setImageBitmap(bitmap)
+            } catch (_: Exception) { setBackgroundColor(0xFF252536.toInt()) }
+            contentDescription = video.title
+        }
+        frame.addView(image, FrameLayout.LayoutParams(-1, -1))
+        val ratio = if (short) 0.68f else 1.78f
+        card.addView(frame, LinearLayout.LayoutParams(-1, if (short) dp(225) else (resources.displayMetrics.widthPixels / ratio).toInt()))
+        feedFrames[video.id] = frame
+        frame.setOnClickListener { openFullPlayer(video) }
+        val title = label(video.title, 14, 0xFFF8FAFC.toInt(), true).apply {
+            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(8), dp(7), dp(8), dp(2))
+            setOnClickListener { openFullPlayer(video) }
+        }
+        card.addView(title)
+        val actions = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), 0, dp(6), 0) }
+        actions.addView(label("${formatDuration(video.durationMs)}  •  ${video.folder}", 10, 0xFF94A3B8.toInt()), LinearLayout.LayoutParams(0, dp(34), 1f))
+        val like = actionButton(if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like")
+        like.setOnClickListener { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections(); like.text = if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like" }
+        actions.addView(like)
+        val later = actionButton(if (watchLaterIds.contains(video.id)) "✓ Later" else "＋ Later")
+        later.setOnClickListener { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections(); later.text = if (watchLaterIds.contains(video.id)) "✓ Later" else "＋ Later" }
+        actions.addView(later)
+        card.addView(actions)
+        return card
+    }
+
+    private fun updateAutoplayPreview() {
+        val scroll = feedScroll ?: return
+        if (currentTab != "Home" || fullScreen || feedFrames.isEmpty()) return
+        val viewportCenter = scroll.scrollY + scroll.height / 2
+        var bestId: Long? = null
+        var bestDistance = Int.MAX_VALUE
+        feedFrames.forEach { (id, frame) ->
+            val loc = IntArray(2); frame.getLocationOnScreen(loc)
+            val top = loc[1] - scroll.getLocationOnScreenY()
+            val bottom = top + frame.height
+            if (bottom > 0 && top < scroll.height) {
+                val center = (top + bottom) / 2
+                val distance = kotlin.math.abs(center - scroll.height / 2)
+                if (distance < bestDistance) { bestDistance = distance; bestId = id }
+            }
+        }
+        val video = videos.firstOrNull { it.id == bestId } ?: return
+        if (previewId == video.id) return
+        previewId = video.id
+        ensurePlayer()
+        val frame = feedFrames[video.id] ?: return
+        (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
+        frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        playerView.useController = false
+        player?.apply {
+            volume = 0f
+            repeatMode = Player.REPEAT_MODE_ONE
+            setMediaItem(MediaItem.fromUri(video.uri))
+            prepare()
+            playWhenReady = true
+        }
+    }
+
+    private fun ScrollView.getLocationOnScreenY(): Int {
+        val pos = IntArray(2); getLocationOnScreen(pos); return pos[1]
+    }
+
+    private fun openFullPlayer(video: LocalVideo) {
+        previewId = null
+        ensurePlayer()
+        (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
+        playerFrame.addView(playerView, 0, FrameLayout.LayoutParams(-1, -1))
+        playerFrame.visibility = View.VISIBLE
+        playerView.useController = true
+        player?.apply {
+            volume = 1f
+            repeatMode = Player.REPEAT_MODE_OFF
+            setMediaItem(MediaItem.fromUri(video.uri))
+            prepare()
+            seekTo(resumePositions[video.id] ?: 0L)
+            playWhenReady = true
+        }
+        currentVideo = video
+        nowPlayingText.text = video.title
+        nowPlayingText.visibility = View.VISIBLE
+        playerFrame.bringToFront()
+    }
+
+    private fun loadSavedCollections() {
+        likedIds.clear(); watchLaterIds.clear()
+        try { JSONArray(prefs.getString("liked_ids", "[]")).let { a -> for (i in 0 until a.length()) likedIds.add(a.getLong(i)) } } catch (_: Exception) {}
+        try { JSONArray(prefs.getString("later_ids", "[]")).let { a -> for (i in 0 until a.length()) watchLaterIds.add(a.getLong(i)) } } catch (_: Exception) {}
+        try {
+            val obj = JSONObject(prefs.getString("resume_positions", "{}"))
+            obj.keys().forEach { key -> resumePositions[key.toLong()] = obj.getLong(key) }
+        } catch (_: Exception) {}
+    }
+
+    private fun saveSavedCollections() {
+        val liked = JSONArray(); likedIds.forEach { liked.put(it) }
+        val later = JSONArray(); watchLaterIds.forEach { later.put(it) }
+        val resume = JSONObject(); resumePositions.forEach { (id, pos) -> resume.put(id.toString(), pos) }
+        prefs.edit().putString("liked_ids", liked.toString()).putString("later_ids", later.toString())
+            .putString("resume_positions", resume.toString()).apply()
+    }
+
+    private fun saveCurrentPosition() {
+        val video = currentVideo ?: return
+        val p = player ?: return
+        if (p.currentPosition > 0) resumePositions[video.id] = p.currentPosition
+        saveSavedCollections()
     }
 
     private fun renderVideoRows(items: List<LocalVideo>) {
@@ -295,11 +447,16 @@ class MainActivity : AppCompatActivity() {
     private fun showVideoMenu(anchor: View, video: LocalVideo) {
         val popup = PopupMenu(this, anchor)
         popup.menu.add("Play")
+        popup.menu.add(if (likedIds.contains(video.id)) "Unlike" else "Like")
+        popup.menu.add(if (watchLaterIds.contains(video.id)) "Remove from Watch Later" else "Watch later")
         popup.menu.add("Add to playlist")
         popup.menu.add("Play next")
         popup.setOnMenuItemClickListener {
             when (it.title.toString()) {
                 "Play" -> playVideo(video)
+                "Like", "Unlike" -> { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections() }
+                "Watch later", "Remove from Watch Later" -> { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections() }
+                "Watch later" -> { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections() }
                 "Add to playlist" -> addToPlaylist(video)
                 "Play next" -> {
                     ensurePlayer()
