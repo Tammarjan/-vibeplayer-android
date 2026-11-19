@@ -29,10 +29,13 @@ import androidx.media3.ui.PlayerView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+import java.util.concurrent.Executors
+import android.os.Handler
+import android.os.Looper
 
 data class LocalVideo(
     val id: Long, val title: String, val uri: Uri,
-    val durationMs: Long, val sizeBytes: Long, val folder: String
+    val durationMs: Long, val sizeBytes: Long, val folder: String, val isPortrait: Boolean
 )
 
 class MainActivity : AppCompatActivity() {
@@ -59,6 +62,10 @@ class MainActivity : AppCompatActivity() {
     private var feedScroll: ScrollView? = null
     private val feedFrames = linkedMapOf<Long, FrameLayout>()
     private var previewId: Long? = null
+    private val ioExecutor = Executors.newFixedThreadPool(3)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var previewUpdate: Runnable? = null
+    private val thumbnailViews = linkedMapOf<Long, ImageView>()
     private val prefs by lazy { getSharedPreferences("vibe_library", MODE_PRIVATE) }
 
     private val permissionLauncher =
@@ -175,8 +182,8 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(feed)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         feedFrames.clear()
-        val longVideos = videos.filter { !isPortraitVideo(it) }
-        val shorts = videos.filter { isPortraitVideo(it) }
+        val longVideos = videos.filter { !it.isPortrait }
+        val shorts = videos.filter { it.isPortrait }
         feed.addView(label("Videos", 20, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(12), 0, dp(8)) })
         if (longVideos.isEmpty()) feed.addView(message("No landscape videos found yet."))
         longVideos.forEach { feed.addView(feedVideoCard(it, false)) }
@@ -188,7 +195,11 @@ class MainActivity : AppCompatActivity() {
             if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, dp(10), 1f))
             feed.addView(row)
         }
-        scroll.viewTreeObserver.addOnScrollChangedListener { updateAutoplayPreview() }
+        scroll.viewTreeObserver.addOnScrollChangedListener {
+            previewUpdate?.let { mainHandler.removeCallbacks(it) }
+            previewUpdate = Runnable { updateAutoplayPreview() }
+            mainHandler.postDelayed(previewUpdate!!, 450)
+        }
         scroll.post { updateAutoplayPreview() }
     }
 
@@ -201,28 +212,24 @@ class MainActivity : AppCompatActivity() {
             }.show()
     }
 
-    private fun isPortraitVideo(video: LocalVideo): Boolean {
-        return try {
-            val retriever = android.media.MediaMetadataRetriever()
-            retriever.setDataSource(this, video.uri)
-            val w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            retriever.release()
-            h > w
-        } catch (_: Exception) { false }
-    }
-
     private fun feedVideoCard(video: LocalVideo, short: Boolean): View {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, dp(10)) }
         val frame = FrameLayout(this).apply { setBackgroundColor(0xFF191923.toInt()) }
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            try {
-                val bitmap = if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(video.uri, Size(640, 360), null)
-                else ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
-                setImageBitmap(bitmap)
-            } catch (_: Exception) { setBackgroundColor(0xFF252536.toInt()) }
+            setBackgroundColor(0xFF252536.toInt())
             contentDescription = video.title
+            tag = video.id
+        }
+        thumbnailViews[video.id] = image
+        ioExecutor.execute {
+            try {
+                val bitmap = if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(video.uri, Size(640, 640), null)
+                else ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
+                mainHandler.post {
+                    if (image.tag == video.id && !isFinishing) image.setImageBitmap(bitmap)
+                }
+            } catch (_: Exception) { }
         }
         frame.addView(image, FrameLayout.LayoutParams(-1, -1))
         val ratio = if (short) 0.68f else 1.78f
@@ -250,7 +257,6 @@ class MainActivity : AppCompatActivity() {
     private fun updateAutoplayPreview() {
         val scroll = feedScroll ?: return
         if (currentTab != "Home" || fullScreen || feedFrames.isEmpty()) return
-        val viewportCenter = scroll.scrollY + scroll.height / 2
         var bestId: Long? = null
         var bestDistance = Int.MAX_VALUE
         feedFrames.forEach { (id, frame) ->
@@ -655,32 +661,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadVideos() {
-        val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.DURATION, MediaStore.Video.Media.SIZE, MediaStore.Video.Media.RELATIVE_PATH)
-        val found = mutableListOf<LocalVideo>()
-        var cursor: Cursor? = null
-        try {
-            cursor = contentResolver.query(collection, projection, null, null, "${MediaStore.Video.Media.DATE_ADDED} DESC")
-            cursor?.use { c ->
-                val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-                val durationCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
-                val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
-                val pathCol = c.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
-                while (c.moveToNext()) {
-                    val id = c.getLong(idCol)
-                    val path = if (pathCol >= 0) c.getString(pathCol).orEmpty().trimEnd('/') else "Videos"
-                    val folder = path.substringAfterLast('/').ifBlank { "Videos" }
-                    found.add(LocalVideo(id, c.getString(nameCol) ?: "Untitled video",
-                        ContentUris.withAppendedId(collection, id), c.getLong(durationCol), c.getLong(sizeCol), folder))
+        content.removeAllViews()
+        content.addView(message("Scanning your video library…"))
+        ioExecutor.execute {
+            val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(
+                MediaStore.Video.Media._ID,
+                MediaStore.Video.Media.DISPLAY_NAME,
+                MediaStore.Video.Media.DURATION,
+                MediaStore.Video.Media.SIZE,
+                MediaStore.Video.Media.RELATIVE_PATH,
+                MediaStore.Video.Media.WIDTH,
+                MediaStore.Video.Media.HEIGHT
+            )
+            val found = mutableListOf<LocalVideo>()
+            try {
+                contentResolver.query(collection, projection, null, null,
+                    "${MediaStore.Video.Media.DATE_ADDED} DESC")?.use { c ->
+                    val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                    val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                    val durationCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+                    val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+                    val pathCol = c.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
+                    val widthCol = c.getColumnIndex(MediaStore.Video.Media.WIDTH)
+                    val heightCol = c.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                    while (c.moveToNext()) {
+                        val id = c.getLong(idCol)
+                        val path = if (pathCol >= 0) c.getString(pathCol).orEmpty().trimEnd('/') else "Videos"
+                        val folder = path.substringAfterLast('/').ifBlank { "Videos" }
+                        val width = if (widthCol >= 0) c.getInt(widthCol) else 0
+                        val height = if (heightCol >= 0) c.getInt(heightCol) else 0
+                        found.add(LocalVideo(
+                            id, c.getString(nameCol) ?: "Untitled video",
+                            ContentUris.withAppendedId(collection, id),
+                            c.getLong(durationCol), c.getLong(sizeCol), folder,
+                            height > width && width > 0
+                        ))
+                    }
                 }
+            } catch (_: Exception) { }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                videos = found
+                renderTab()
+                if (found.isEmpty()) Toast.makeText(this, "No videos found. Check video permission and device storage.", Toast.LENGTH_LONG).show()
             }
-        } catch (_: Exception) {
-            statusText = label("Could not scan videos", 12, 0xFF94A3B8.toInt())
         }
-        videos = found
-        if (currentTab == "Home") renderTab() else renderTab()
     }
 
     private fun cardRow(icon: String, title: String, subtitle: String, click: () -> Unit): View {
@@ -740,7 +766,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    override fun onPause() {
+        saveCurrentPosition()
+        super.onPause()
+        if (!fullScreen) player?.pause()
+    }
+
     override fun onStop() {
+        saveCurrentPosition()
         super.onStop()
         if (!fullScreen) player?.pause()
     }
@@ -751,6 +784,8 @@ class MainActivity : AppCompatActivity() {
         player = null
         equalizer?.release()
         equalizer = null
+        ioExecutor.shutdownNow()
+        previewUpdate?.let { mainHandler.removeCallbacks(it) }
         super.onDestroy()
     }
 }
