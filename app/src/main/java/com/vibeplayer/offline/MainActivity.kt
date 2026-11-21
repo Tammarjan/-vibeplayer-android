@@ -63,8 +63,6 @@ class MainActivity : AppCompatActivity() {
     private val watchLaterIds = linkedSetOf<Long>()
     private val resumePositions = mutableMapOf<Long, Long>()
     private var feedScroll: ScrollView? = null
-    private val feedFrames = linkedMapOf<Long, FrameLayout>()
-    private var previewId: Long? = null
     private val ioExecutor = Executors.newFixedThreadPool(2)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var previewUpdate: Runnable? = null
@@ -184,15 +182,16 @@ class MainActivity : AppCompatActivity() {
         val feed = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(feed)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        feedFrames.clear()
+        thumbnailViews.clear()
+        thumbnailLoading.clear()
         val longVideos = videos.filter { !it.isPortrait }
         val shorts = videos.filter { it.isPortrait }
         feed.addView(label("Videos", 20, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(12), 0, dp(8)) })
         if (longVideos.isEmpty()) feed.addView(message("No landscape videos found yet."))
-        longVideos.forEach { feed.addView(feedVideoCard(it, false)) }
+        longVideos.take(40).forEach { feed.addView(feedVideoCard(it, false)) }
         feed.addView(label("Shorts", 22, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(18), 0, dp(10)) })
         if (shorts.isEmpty()) feed.addView(message("Portrait videos will appear here as Shorts."))
-        shorts.chunked(2).forEach { pair ->
+        shorts.take(40).chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
             pair.forEach { row.addView(feedVideoCard(it, true), LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5) }) }
             if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, dp(10), 1f))
@@ -200,10 +199,10 @@ class MainActivity : AppCompatActivity() {
         }
         scroll.viewTreeObserver.addOnScrollChangedListener {
             previewUpdate?.let { mainHandler.removeCallbacks(it) }
-            previewUpdate = Runnable { updateAutoplayPreview() }
+            previewUpdate = Runnable { loadVisibleThumbnails() }
             mainHandler.postDelayed(previewUpdate!!, 450)
         }
-        scroll.post { updateAutoplayPreview() }
+        scroll.post { loadVisibleThumbnails() }
     }
 
     private fun showSearchDialog() {
@@ -225,19 +224,9 @@ class MainActivity : AppCompatActivity() {
             tag = video.id
         }
         thumbnailViews[video.id] = image
-        ioExecutor.execute {
-            try {
-                val bitmap = if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(video.uri, Size(320, 180), null)
-                else ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
-                mainHandler.post {
-                    if (image.tag == video.id && !isFinishing) image.setImageBitmap(bitmap)
-                }
-            } catch (_: Exception) { }
-        }
         frame.addView(image, FrameLayout.LayoutParams(-1, -1))
         val ratio = if (short) 0.68f else 1.78f
         card.addView(frame, LinearLayout.LayoutParams(-1, if (short) dp(225) else (resources.displayMetrics.widthPixels / ratio).toInt()))
-        feedFrames[video.id] = frame
         frame.setOnClickListener { if (short) openShortsPlayer(video) else openFullPlayer(video) }
         val title = label(video.title, 14, 0xFFF8FAFC.toInt(), true).apply {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
@@ -257,35 +246,42 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
-    private fun updateAutoplayPreview() {
-        val scroll = feedScroll ?: return
-        if (currentTab != "Home" || fullScreen || feedFrames.isEmpty()) return
-        var bestId: Long? = null
-        var bestDistance = Int.MAX_VALUE
-        feedFrames.forEach { (id, frame) ->
-            val loc = IntArray(2); frame.getLocationOnScreen(loc)
-            val top = loc[1] - scroll.getLocationOnScreenY()
-            val bottom = top + frame.height
-            if (bottom > 0 && top < scroll.height) {
-                val center = (top + bottom) / 2
-                val distance = kotlin.math.abs(center - scroll.height / 2)
-                if (distance < bestDistance) { bestDistance = distance; bestId = id }
+    // Feed stays decoder-free: only thumbnails for currently visible cards are loaded.
+    private fun loadVisibleThumbnails() {
+        if (currentTab != "Home" || isFinishing || isDestroyed) return
+        val visibleRect = android.graphics.Rect()
+        thumbnailViews.forEach { (id, image) ->
+            val visible = image.isShown && image.getLocalVisibleRect(visibleRect)
+            if (!visible) {
+                image.setImageDrawable(null)
+                return@forEach
             }
-        }
-        val video = videos.firstOrNull { it.id == bestId } ?: return
-        if (previewId == video.id) return
-        previewId = video.id
-        ensurePlayer()
-        val frame = feedFrames[video.id] ?: return
-        (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
-        frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
-        playerView.useController = false
-        player?.apply {
-            volume = 0f
-            repeatMode = Player.REPEAT_MODE_ONE
-            setMediaItem(MediaItem.fromUri(video.uri))
-            prepare()
-            playWhenReady = true
+            if (image.drawable != null || !thumbnailLoading.add(id)) return@forEach
+            val video = videos.firstOrNull { it.id == id } ?: run {
+                thumbnailLoading.remove(id)
+                return@forEach
+            }
+            ioExecutor.execute {
+                var bitmap: android.graphics.Bitmap? = null
+                try {
+                    bitmap = if (Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.loadThumbnail(video.uri, Size(240, 135), null)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", MediaStore.Video.Thumbnails.MINI_KIND)
+                    }
+                } catch (_: Exception) { }
+                val result = bitmap
+                mainHandler.post {
+                    thumbnailLoading.remove(id)
+                    if (result != null && !isFinishing && !isDestroyed &&
+                        image.tag == id && image.isShown && image.getLocalVisibleRect(visibleRect)) {
+                        image.setImageBitmap(result)
+                    } else if (result != null && !result.isRecycled) {
+                        result.recycle()
+                    }
+                }
+            }
         }
     }
 
@@ -299,7 +295,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun openFullPlayer(video: LocalVideo) {
         saveCurrentPosition()
-        previewId = null
         shortsMode = false
         watchPageMode = true
         fullScreen = false
@@ -362,7 +357,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun openShortsPlayer(video: LocalVideo) {
         saveCurrentPosition()
-        previewId = null
         shortsMode = true
         watchPageMode = false
         fullScreen = true
