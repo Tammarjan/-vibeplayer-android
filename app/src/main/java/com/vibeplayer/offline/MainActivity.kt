@@ -67,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var previewUpdate: Runnable? = null
     private val thumbnailViews = linkedMapOf<Long, ImageView>()
+    private val thumbnailLoading = linkedSetOf<Long>()
     private val prefs by lazy { getSharedPreferences("vibe_library", MODE_PRIVATE) }
 
     private val permissionLauncher =
