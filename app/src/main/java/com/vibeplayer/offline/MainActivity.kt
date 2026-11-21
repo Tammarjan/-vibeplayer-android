@@ -320,6 +320,7 @@ class MainActivity : AppCompatActivity() {
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
         playerFrame.visibility = View.VISIBLE
         root.removeAllViews()
+        (playerFrame.parent as? android.view.ViewGroup)?.removeView(playerFrame)
         root.setPadding(0, 0, 0, 0)
         val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF09090F.toInt()) }
         val videoHeight = (resources.displayMetrics.widthPixels * 9f / 16f).toInt()
@@ -392,6 +393,7 @@ class MainActivity : AppCompatActivity() {
         playerFrame.removeAllViews()
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
         root.removeAllViews()
+        (playerFrame.parent as? android.view.ViewGroup)?.removeView(playerFrame)
         root.setPadding(dp(14), dp(8), dp(14), 0)
         root.addView(topHeader)
         playerFrame.visibility = View.GONE
