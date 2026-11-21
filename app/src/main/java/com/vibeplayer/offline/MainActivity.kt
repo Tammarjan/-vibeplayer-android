@@ -7,6 +7,8 @@ import android.database.Cursor
 import android.media.audiofx.Equalizer
 import android.net.Uri
 import android.util.Size
+import android.util.LruCache
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ThumbnailUtils
 import android.provider.MediaStore as VideoStoreAlias
@@ -68,6 +70,11 @@ class MainActivity : AppCompatActivity() {
     private var previewUpdate: Runnable? = null
     private val thumbnailViews = linkedMapOf<Long, ImageView>()
     private val thumbnailLoading = linkedSetOf<Long>()
+    private val thumbnailCache = object : LruCache<Long, Bitmap>(24 * 1024) {
+        override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount / 1024
+    }
+    private val thumbnailDir by lazy { java.io.File(cacheDir, "vibe_thumbnails").apply { mkdirs() } }
+    private var saveScrollRunnable: Runnable? = null
     private val prefs by lazy { getSharedPreferences("vibe_library", MODE_PRIVATE) }
 
     private val permissionLauncher =
@@ -201,9 +208,17 @@ class MainActivity : AppCompatActivity() {
         scroll.viewTreeObserver.addOnScrollChangedListener {
             previewUpdate?.let { mainHandler.removeCallbacks(it) }
             previewUpdate = Runnable { loadVisibleThumbnails() }
-            mainHandler.postDelayed(previewUpdate!!, 450)
+            mainHandler.postDelayed(previewUpdate!!, 80)
+            saveScrollRunnable?.let { mainHandler.removeCallbacks(it) }
+            saveScrollRunnable = Runnable {
+                prefs.edit().putInt("home_scroll_y", scroll.scrollY).apply()
+            }
+            mainHandler.postDelayed(saveScrollRunnable!!, 180)
         }
-        scroll.post { loadVisibleThumbnails() }
+        scroll.post {
+            scroll.scrollTo(0, prefs.getInt("home_scroll_y", 0).coerceAtLeast(0))
+            loadVisibleThumbnails()
+        }
     }
 
     private fun showSearchDialog() {
@@ -247,7 +262,10 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
-    // Feed stays decoder-free: only thumbnails for currently visible cards are loaded.
+    // Thumbnails use a small RAM LRU plus persistent disk cache.
+    // Decode and file I/O always run off the UI thread.
+    private fun thumbnailFile(id: Long) = java.io.File(thumbnailDir, "$id.jpg")
+
     private fun loadVisibleThumbnails() {
         if (currentTab != "Home" || isFinishing || isDestroyed) return
         val visibleRect = android.graphics.Rect()
@@ -262,28 +280,59 @@ class MainActivity : AppCompatActivity() {
                 thumbnailLoading.remove(id)
                 return@forEach
             }
+            val cached = thumbnailCache.get(id)
+            if (cached != null && !cached.isRecycled) {
+                image.setImageBitmap(cached)
+                thumbnailLoading.remove(id)
+                return@forEach
+            }
             ioExecutor.execute {
-                var bitmap: android.graphics.Bitmap? = null
+                var bitmap: Bitmap? = null
+                val diskFile = thumbnailFile(id)
                 try {
-                    bitmap = if (Build.VERSION.SDK_INT >= 29) {
-                        contentResolver.loadThumbnail(video.uri, Size(240, 135), null)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", MediaStore.Video.Thumbnails.MINI_KIND)
+                    if (diskFile.exists()) bitmap = BitmapFactory.decodeFile(diskFile.absolutePath)
+                    if (bitmap == null) {
+                        bitmap = if (Build.VERSION.SDK_INT >= 29) {
+                            contentResolver.loadThumbnail(video.uri, Size(320, 180), null)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            ThumbnailUtils.createVideoThumbnail(video.uri.path ?: "", MediaStore.Video.Thumbnails.MINI_KIND)
+                        }
+                        bitmap?.let { generated ->
+                            try {
+                                diskFile.outputStream().use { out ->
+                                    generated.compress(Bitmap.CompressFormat.JPEG, 84, out)
+                                }
+                                trimThumbnailDiskCache()
+                            } catch (_: Exception) { }
+                        }
                     }
                 } catch (_: Exception) { }
                 val result = bitmap
                 mainHandler.post {
                     thumbnailLoading.remove(id)
-                    if (result != null && !isFinishing && !isDestroyed &&
-                        image.tag == id && image.isShown && image.getLocalVisibleRect(visibleRect)) {
-                        image.setImageBitmap(result)
-                    } else if (result != null && !result.isRecycled) {
-                        result.recycle()
+                    if (result != null && !isFinishing && !isDestroyed) {
+                        thumbnailCache.put(id, result)
+                        if (image.tag == id && image.isShown && image.getLocalVisibleRect(visibleRect)) {
+                            image.setImageBitmap(result)
+                        }
                     }
                 }
             }
         }
+    }
+
+    private fun trimThumbnailDiskCache() {
+        try {
+            val files = thumbnailDir.listFiles()?.filter { it.isFile } ?: return
+            var total = files.sumOf { it.length() }
+            if (total <= 120L * 1024L * 1024L) return
+            files.sortedBy { it.lastModified() }.forEach { file ->
+                if (total <= 120L * 1024L * 1024L) return@forEach
+                total -= file.length()
+                file.delete()
+            }
+        } catch (_: Exception) { }
     }
 
     private fun ScrollView.getLocationOnScreenY(): Int {
@@ -900,6 +949,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         saveCurrentPosition()
+        feedScroll?.let { prefs.edit().putInt("home_scroll_y", it.scrollY).apply() }
         super.onPause()
         if (!fullScreen) player?.pause()
     }
@@ -918,6 +968,8 @@ class MainActivity : AppCompatActivity() {
         equalizer = null
         ioExecutor.shutdownNow()
         previewUpdate?.let { mainHandler.removeCallbacks(it) }
+        saveScrollRunnable?.let { mainHandler.removeCallbacks(it) }
+        thumbnailCache.evictAll()
         super.onDestroy()
     }
 }
