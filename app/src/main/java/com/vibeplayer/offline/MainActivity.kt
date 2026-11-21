@@ -89,7 +89,97 @@ class MainActivity : AppCompatActivity() {
         loadPlaylists()
         loadSavedCollections()
         buildScreen()
+        showBrandSplash()
         ensurePermissionAndLoad()
+    }
+
+
+    private fun showBrandSplash() {
+        val decor = window.decorView as? android.view.ViewGroup ?: return
+        val splash = FrameLayout(this).apply {
+            setBackgroundColor(0xFF080711.toInt())
+            isClickable = true
+            isFocusable = true
+        }
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(24), dp(28), dp(24))
+        }
+        val logo = ImageView(this).apply {
+            setImageResource(R.drawable.vibe_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            alpha = 0f
+            scaleX = 0.72f
+            scaleY = 0.72f
+        }
+        stack.addView(logo, LinearLayout.LayoutParams(dp(142), dp(142)).apply {
+            bottomMargin = dp(22)
+        })
+        val name = TextView(this).apply {
+            text = "VibePlayer"
+            textSize = 32f
+            letterSpacing = 0.025f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFF8FAFC.toInt())
+            typeface = android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.NORMAL)
+            alpha = 0f
+        }
+        stack.addView(name)
+        val tagline = TextView(this).apply {
+            text = "YOUR VIDEOS. YOUR VIBE."
+            textSize = 11f
+            letterSpacing = 0.22f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFAAA1C9.toInt())
+            alpha = 0f
+        }
+        stack.addView(tagline, LinearLayout.LayoutParams(-1, dp(34)))
+        val spacer = View(this)
+        stack.addView(spacer, LinearLayout.LayoutParams(1, dp(54)))
+        val credit = TextView(this).apply {
+            text = "DEVELOPED BY"
+            textSize = 10f
+            letterSpacing = 0.2f
+            gravity = Gravity.CENTER
+            setTextColor(0xFF8B83A7.toInt())
+            alpha = 0f
+        }
+        stack.addView(credit)
+        val developer = TextView(this).apply {
+            text = "Tammar Jan"
+            textSize = 17f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFD8B4FE.toInt())
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            alpha = 0f
+        }
+        stack.addView(developer, LinearLayout.LayoutParams(-1, dp(34)))
+        splash.addView(stack, FrameLayout.LayoutParams(-1, -1))
+        decor.addView(splash, android.view.ViewGroup.LayoutParams(-1, -1))
+
+        val pop = android.animation.AnimatorSet().apply {
+            playTogether(
+                android.animation.ObjectAnimator.ofFloat(logo, View.ALPHA, 0f, 1f),
+                android.animation.ObjectAnimator.ofFloat(logo, View.SCALE_X, 0.72f, 1.04f, 1f),
+                android.animation.ObjectAnimator.ofFloat(logo, View.SCALE_Y, 0.72f, 1.04f, 1f),
+                android.animation.ObjectAnimator.ofFloat(name, View.ALPHA, 0f, 1f),
+                android.animation.ObjectAnimator.ofFloat(tagline, View.ALPHA, 0f, 1f),
+                android.animation.ObjectAnimator.ofFloat(credit, View.ALPHA, 0f, 1f),
+                android.animation.ObjectAnimator.ofFloat(developer, View.ALPHA, 0f, 1f)
+            )
+            duration = 850
+            interpolator = android.view.animation.DecelerateInterpolator()
+        }
+        pop.startDelay = 120
+        pop.start()
+        mainHandler.postDelayed({
+            if (!isFinishing && !isDestroyed && splash.parent != null) {
+                splash.animate().alpha(0f).setDuration(360).withEndAction {
+                    (splash.parent as? android.view.ViewGroup)?.removeView(splash)
+                }.start()
+            }
+        }, 2100)
     }
 
     private fun buildScreen() {
