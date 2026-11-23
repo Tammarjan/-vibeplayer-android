@@ -464,6 +464,35 @@ class MainActivity : AppCompatActivity() {
         val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF09090F.toInt()) }
         val videoHeight = (resources.displayMetrics.widthPixels * 9f / 16f).toInt()
         page.addView(playerFrame, LinearLayout.LayoutParams(-1, videoHeight))
+        val fullscreen = TextView(this).apply {
+            text = "⛶"
+            textSize = 23f
+            gravity = Gravity.CENTER
+            setTextColor(-1)
+            setBackgroundColor(0x99000000.toInt())
+        }
+        var pageFullscreen = false
+        fullscreen.setOnClickListener {
+            pageFullscreen = !pageFullscreen
+            if (pageFullscreen) {
+                page.removeView(playerFrame)
+                page.addView(playerFrame, 0, LinearLayout.LayoutParams(-1, 0, 1f))
+                scroll.visibility = View.GONE
+                fullscreen.text = "⤢"
+                window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
+            } else {
+                page.removeView(playerFrame)
+                page.addView(playerFrame, 0, LinearLayout.LayoutParams(-1, videoHeight))
+                scroll.visibility = View.VISIBLE
+                fullscreen.text = "⛶"
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+            }
+        }
+        playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.END or Gravity.TOP).apply { setMargins(0, dp(8), dp(8), 0) })
         val scroll = ScrollView(this)
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(18)) }
         details.addView(label(video.title, 19, 0xFFF8FAFC.toInt(), true))
@@ -503,11 +532,11 @@ class MainActivity : AppCompatActivity() {
         fullScreen = true
         currentVideo = video
         ensurePlayer()
-        player?.apply { volume = 1f; repeatMode = Player.REPEAT_MODE_ONE; setMediaItem(MediaItem.fromUri(video.uri)); prepare(); seekTo(resumePositions[video.id] ?: 0L); playWhenReady = true }
-        playerView.useController = true
-        playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        playerView.player = null
         detachPlayerView()
         playerFrame.removeAllViews()
+        playerView.useController = true
+        playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
         root.removeAllViews()
         root.setPadding(0, 0, 0, 0)
@@ -516,8 +545,36 @@ class MainActivity : AppCompatActivity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
-        val back = TextView(this).apply { text = "‹"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(-1); setBackgroundColor(0x66000000); setOnClickListener { closeWatchPage() } }
+        val back = TextView(this).apply { text = "‹"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(-1); setBackgroundColor(0x66000000.toInt()); setOnClickListener { closeWatchPage() } }
         playerFrame.addView(back, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.START or Gravity.TOP))
+        val fullscreen = TextView(this).apply {
+            text = "⛶"
+            textSize = 23f
+            gravity = Gravity.CENTER
+            setTextColor(-1)
+            setBackgroundColor(0x66000000.toInt())
+            setOnClickListener {
+                val hidden = (window.decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_FULLSCREEN) != 0
+                if (hidden) {
+                    @Suppress("DEPRECATION")
+                    window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                } else {
+                    window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                    @Suppress("DEPRECATION")
+                    window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
+                }
+            }
+        }
+        playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END or Gravity.TOP))
+        player?.apply {
+            volume = 1f
+            repeatMode = Player.REPEAT_MODE_ONE
+            setMediaItem(MediaItem.fromUri(video.uri))
+            prepare()
+            seekTo(resumePositions[video.id] ?: 0L)
+            playWhenReady = true
+        }
     }
 
     private fun closeWatchPage() {
