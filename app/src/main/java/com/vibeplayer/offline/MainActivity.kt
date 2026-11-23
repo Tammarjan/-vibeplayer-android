@@ -464,6 +464,7 @@ class MainActivity : AppCompatActivity() {
         val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF09090F.toInt()) }
         val videoHeight = (resources.displayMetrics.widthPixels * 9f / 16f).toInt()
         page.addView(playerFrame, LinearLayout.LayoutParams(-1, videoHeight))
+        val scroll = ScrollView(this)
         val fullscreen = TextView(this).apply {
             text = "⛶"
             textSize = 23f
@@ -493,7 +494,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.END or Gravity.TOP).apply { setMargins(0, dp(8), dp(8), 0) })
-        val scroll = ScrollView(this)
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(18)) }
         details.addView(label(video.title, 19, 0xFFF8FAFC.toInt(), true))
         details.addView(label(formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes), 12, 0xFF9CA3AF.toInt()).apply { setPadding(0, dp(7), 0, dp(12)) })
