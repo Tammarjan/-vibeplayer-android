@@ -345,8 +345,13 @@ class MainActivity : AppCompatActivity() {
         val like = actionButton(if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like")
         like.setOnClickListener { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections(); like.text = if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like" }
         actions.addView(like)
-        val later = actionButton(if (watchLaterIds.contains(video.id)) "✓ Later" else "＋ Later")
-        later.setOnClickListener { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections(); later.text = if (watchLaterIds.contains(video.id)) "✓ Later" else "＋ Later" }
+        val later = actionButton(if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Later")
+        later.setOnClickListener {
+            if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id)
+            saveSavedCollections()
+            later.text = if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Later"
+            Toast.makeText(this, if (watchLaterIds.contains(video.id)) "Added to Watch Later" else "Removed from Watch Later", Toast.LENGTH_SHORT).show()
+        }
         actions.addView(later)
         card.addView(actions)
         return card
@@ -505,7 +510,12 @@ class MainActivity : AppCompatActivity() {
         val like = actionButton(if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like")
         like.setOnClickListener { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections(); like.text = if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like" }
         val later = actionButton(if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Watch later")
-        later.setOnClickListener { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections(); later.text = if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Watch later" }
+        later.setOnClickListener {
+            if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id)
+            saveSavedCollections()
+            later.text = if (watchLaterIds.contains(video.id)) "✓ Saved" else "＋ Watch later"
+            Toast.makeText(this, if (watchLaterIds.contains(video.id)) "Added to Watch Later" else "Removed from Watch Later", Toast.LENGTH_SHORT).show()
+        }
         val playlist = actionButton("＋ Playlist")
         playlist.setOnClickListener { addToPlaylist(video) }
         actions.addView(like, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(5) })
@@ -532,12 +542,12 @@ class MainActivity : AppCompatActivity() {
         fullScreen = true
         currentVideo = video
         ensurePlayer()
-        playerView.player = null
         detachPlayerView()
         playerFrame.removeAllViews()
         playerView.useController = true
         playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        playerView.player = player
         root.removeAllViews()
         root.setPadding(0, 0, 0, 0)
         root.addView(playerFrame, LinearLayout.LayoutParams(-1, -1))
@@ -678,6 +688,9 @@ class MainActivity : AppCompatActivity() {
     private fun renderLibrary() {
         content.addView(label("Library", 21, 0xFFF8FAFC.toInt(), true))
         content.addView(label("All videos stored on this device", 12, 0xFF94A3B8.toInt()))
+        content.addView(cardRow("◷", "Watch Later", "${watchLaterIds.size} saved videos  •  Watch anytime") {
+            showCollection("Watch Later", videos.filter { watchLaterIds.contains(it.id) })
+        })
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(list)
@@ -777,8 +790,11 @@ class MainActivity : AppCompatActivity() {
             when (it.title.toString()) {
                 "Play" -> playVideo(video)
                 "Like", "Unlike" -> { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections() }
-                "Watch later", "Remove from Watch Later" -> { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections() }
-                "Watch later" -> { if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id); saveSavedCollections() }
+                "Watch later", "Remove from Watch Later" -> {
+                    if (watchLaterIds.contains(video.id)) watchLaterIds.remove(video.id) else watchLaterIds.add(video.id)
+                    saveSavedCollections()
+                    Toast.makeText(this, if (watchLaterIds.contains(video.id)) "Added to Watch Later" else "Removed from Watch Later", Toast.LENGTH_SHORT).show()
+                }
                 "Add to playlist" -> addToPlaylist(video)
                 "Play next" -> {
                     ensurePlayer()
