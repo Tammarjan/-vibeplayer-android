@@ -468,6 +468,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openFullPlayer(video: LocalVideo, queueItems: List<LocalVideo> = videos) {
+        resetPlaybackHold()
         saveCurrentPosition()
         shortsMode = false
         watchPageMode = true
@@ -578,6 +579,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openShortsPlayer(video: LocalVideo) {
+        resetPlaybackHold()
         saveCurrentPosition()
         feedScroll?.let { prefs.edit().putInt("home_scroll_y", it.scrollY).apply() }
         val previousLong = if (watchPageMode && currentVideo?.isPortrait == false) currentVideo else lastLandscapeVideo
@@ -631,10 +633,11 @@ class MainActivity : AppCompatActivity() {
         startPlaybackService()
         player?.apply {
             volume = 1f
-            repeatMode = Player.REPEAT_MODE_ONE
-            setMediaItem(MediaItem.fromUri(video.uri))
+            repeatMode = Player.REPEAT_MODE_ALL
+            val shortsQueue = videos.filter { it.isPortrait }.ifEmpty { listOf(video) }
+            val shortsStart = shortsQueue.indexOfFirst { it.id == video.id }.coerceAtLeast(0)
+            setMediaItems(shortsQueue.map { MediaItem.fromUri(it.uri) }, shortsStart, resumePositions[video.id] ?: 0L)
             prepare()
-            seekTo(resumePositions[video.id] ?: 0L)
             playWhenReady = true
         }
     }
