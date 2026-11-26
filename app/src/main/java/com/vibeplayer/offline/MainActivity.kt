@@ -216,7 +216,8 @@ class MainActivity : AppCompatActivity() {
         topHeader.addView(eqButton)
         root.addView(topHeader)
 
-        playerView = PlayerView(this).apply {
+        playerView = layoutInflater.inflate(R.layout.vibe_player_view, null) as PlayerView
+        playerView.apply {
             useController = true
             resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
@@ -660,7 +661,7 @@ class MainActivity : AppCompatActivity() {
         requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         detachPlayerView()
         playerFrame.removeAllViews()
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
@@ -732,7 +733,7 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
         })
-        playerFrame.setOnTouchListener { _, event -> detector.onTouchEvent(event); false }
+        playerView.setOnTouchListener { _, event -> detector.onTouchEvent(event); false }
     }
 
     private fun startPlaybackService() {
