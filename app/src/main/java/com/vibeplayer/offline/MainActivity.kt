@@ -108,6 +108,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashLogger()
         window.statusBarColor = 0xFFFFFFFF.toInt()
         window.navigationBarColor = 0xFFFFFFFF.toInt()
         @Suppress("DEPRECATION")
@@ -115,10 +116,62 @@ class MainActivity : AppCompatActivity() {
         loadPlaylists()
         loadSavedCollections()
         buildScreen()
+        mainHandler.postDelayed({ showPreviousCrashReport() }, 650)
         showBrandSplash()
         ensurePermissionAndLoad()
     }
 
+
+    private fun installCrashLogger() {
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val report = java.io.File(filesDir, "vibeplayer_crash_report.txt")
+                val lastStage = java.io.File(filesDir, "vibeplayer_last_stage.txt")
+                val version = try {
+                    if (Build.VERSION.SDK_INT >= 33) packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+                    else packageManager.getPackageInfo(packageName, 0).versionName
+                } catch (_: Exception) { "unknown" }
+                report.writeText("VibePlayer crash report\nVersion: " + version +
+                    "\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL +
+                    "\nAndroid: " + Build.VERSION.RELEASE + " (SDK " + Build.VERSION.SDK_INT + ")" +
+                    "\nThread: " + thread.name + "\n\nLast app stage: " +
+                    (if (lastStage.exists()) lastStage.readText() else "not recorded") +
+                    "\n\nStack trace:\n" + throwable.stackTraceToString())
+            } catch (_: Throwable) { }
+            try {
+                if (previousHandler != null) previousHandler.uncaughtException(thread, throwable)
+                else { android.os.Process.killProcess(android.os.Process.myPid()); kotlin.system.exitProcess(10) }
+            } catch (_: Throwable) {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
+        }
+    }
+
+    private fun recordPlayerStage(stage: String) {
+        try { java.io.File(filesDir, "vibeplayer_last_stage.txt").writeText(System.currentTimeMillis().toString() + " | " + stage) }
+        catch (_: Exception) { }
+    }
+
+    private fun showPreviousCrashReport() {
+        val report = java.io.File(filesDir, "vibeplayer_crash_report.txt")
+        if (!report.exists() || isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle("VibePlayer crash report")
+            .setMessage("A previous app crash was recorded. Please share this report so the crash can be fixed.")
+            .setPositiveButton("Share report") { _, _ ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "VibePlayer crash report")
+                    putExtra(Intent.EXTRA_TEXT, try { report.readText() } catch (_: Exception) { "Could not read crash report." })
+                }
+                startActivity(Intent.createChooser(send, "Share crash report"))
+            }
+            .setNegativeButton("Later", null)
+            .setNeutralButton("Delete") { _, _ -> report.delete() }
+            .show()
+    }
 
     private fun showBrandSplash() {
         val decor = window.decorView as? android.view.ViewGroup ?: return
@@ -468,6 +521,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openFullPlayer(video: LocalVideo, queueItems: List<LocalVideo> = videos) {
+        recordPlayerStage("openFullPlayer: begin videoId=" + video.id)
         resetPlaybackHold()
         saveCurrentPosition()
         val alreadyOnWatchPage = watchPageMode && !shortsMode &&
@@ -477,20 +531,26 @@ class MainActivity : AppCompatActivity() {
         fullScreen = false
         currentVideo = video
         if (!video.isPortrait) lastLandscapeVideo = video
+        recordPlayerStage("openFullPlayer: ensurePlayer")
         ensurePlayer()
         startPlaybackService()
         val queue = queueItems.ifEmpty { listOf(video) }
         val startIndex = queue.indexOfFirst { it.id == video.id }.takeIf { it >= 0 } ?: 0
+        recordPlayerStage("openFullPlayer: replacing queue size=" + queue.size + " index=" + startIndex)
         player?.apply {
             // Fully release the previous item's decoder before installing the next queue.
             playWhenReady = false
             stop()
+            recordPlayerStage("openFullPlayer: stopped previous playback")
             clearMediaItems()
             volume = 1f
             repeatMode = Player.REPEAT_MODE_OFF
             setMediaItems(queue.map { MediaItem.fromUri(it.uri) }, startIndex, resumePositions[video.id] ?: 0L)
+            recordPlayerStage("openFullPlayer: media items set")
             prepare()
+            recordPlayerStage("openFullPlayer: prepared")
             playWhenReady = true
+            recordPlayerStage("openFullPlayer: playWhenReady true")
         }
         playerView.useController = true
         playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -1166,6 +1226,7 @@ class MainActivity : AppCompatActivity() {
                     updateWatchPageVideoInfo(changed)
                 }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    recordPlayerStage("ExoPlayer error: " + error.errorCodeName + " / " + error.message)
                     mainHandler.post {
                         player?.playWhenReady = false
                         saveCurrentPosition()
