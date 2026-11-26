@@ -1,6 +1,12 @@
 package com.vibeplayer.offline
 
 import android.Manifest
+import android.app.PictureInPictureParams
+import android.content.Intent
+import android.content.res.Configuration
+import android.util.Rational
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.database.Cursor
@@ -75,6 +81,12 @@ class MainActivity : AppCompatActivity() {
     }
     private val thumbnailDir by lazy { java.io.File(cacheDir, "vibe_thumbnails").apply { mkdirs() } }
     private var saveScrollRunnable: Runnable? = null
+    private var returnFromShortsVideo: LocalVideo? = null
+    private var returnFromShortsPosition: Long = 0L
+    private var returnFromShortsPlaying: Boolean = false
+    private var playbackServiceStarted = false
+    private var watchPageContainer: LinearLayout? = null
+    private var watchPageScroll: ScrollView? = null
     private val prefs by lazy { getSharedPreferences("vibe_library", MODE_PRIVATE) }
 
     private val permissionLauncher =
@@ -84,8 +96,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = 0xFF09090F.toInt()
-        window.navigationBarColor = 0xFF09090F.toInt()
+        window.statusBarColor = 0xFFFFFFFF.toInt()
+        window.navigationBarColor = 0xFFFFFFFF.toInt()
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         loadPlaylists()
         loadSavedCollections()
         buildScreen()
@@ -97,7 +111,7 @@ class MainActivity : AppCompatActivity() {
     private fun showBrandSplash() {
         val decor = window.decorView as? android.view.ViewGroup ?: return
         val splash = FrameLayout(this).apply {
-            setBackgroundColor(0xFF080711.toInt())
+            setBackgroundColor(0xFFFFFFFF.toInt())
             isClickable = true
             isFocusable = true
         }
@@ -121,7 +135,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 32f
             letterSpacing = 0.025f
             gravity = Gravity.CENTER
-            setTextColor(0xFFF8FAFC.toInt())
+            setTextColor(0xFF0F0F0F.toInt())
             typeface = android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.NORMAL)
             alpha = 0f
         }
@@ -131,7 +145,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 11f
             letterSpacing = 0.22f
             gravity = Gravity.CENTER
-            setTextColor(0xFFAAA1C9.toInt())
+            setTextColor(0xFF666666.toInt())
             alpha = 0f
         }
         stack.addView(tagline, LinearLayout.LayoutParams(-1, dp(34)))
@@ -142,7 +156,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 10f
             letterSpacing = 0.2f
             gravity = Gravity.CENTER
-            setTextColor(0xFF8B83A7.toInt())
+            setTextColor(0xFF777777.toInt())
             alpha = 0f
         }
         stack.addView(credit)
@@ -150,7 +164,7 @@ class MainActivity : AppCompatActivity() {
             text = "Tammar Jan"
             textSize = 17f
             gravity = Gravity.CENTER
-            setTextColor(0xFFD8B4FE.toInt())
+            setTextColor(0xFF6F42C1.toInt())
             typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
             alpha = 0f
         }
@@ -185,14 +199,14 @@ class MainActivity : AppCompatActivity() {
     private fun buildScreen() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF09090F.toInt())
+            setBackgroundColor(0xFFFFFFFF.toInt())
             setPadding(dp(14), dp(8), dp(14), 0)
         }
         topHeader = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
         }
-        val brand = label("vibe●player", 24, 0xFFF8FAFC.toInt(), true)
+        val brand = label("vibe●player", 24, 0xFF0F0F0F.toInt(), true)
         topHeader.addView(brand, LinearLayout.LayoutParams(0, dp(48), 1f))
         val eqButton = actionButton("♫  EQ")
         eqButton.setOnClickListener { showEqualizer() }
@@ -223,7 +237,7 @@ class MainActivity : AppCompatActivity() {
         })
         root.addView(playerFrame, LinearLayout.LayoutParams(-1, dp(218)))
 
-        nowPlayingText = label("Choose a video to start watching", 14, 0xFFF1F5F9.toInt(), true)
+        nowPlayingText = label("Choose a video to start watching", 14, 0xFF0F0F0F.toInt(), true)
         nowPlayingText.setPadding(dp(2), dp(9), dp(2), dp(7))
         root.addView(nowPlayingText)
 
@@ -233,7 +247,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(0, dp(7), 0, dp(8))
-            setBackgroundColor(0xFF101019.toInt())
+            setBackgroundColor(0xFFF2F2F2.toInt())
         }
         root.addView(bottomNav, LinearLayout.LayoutParams(-1, dp(60)))
         setContentView(root)
@@ -253,7 +267,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 textSize = 11f
                 gravity = Gravity.CENTER
-                setTextColor(if (currentTab == tab) 0xFFB79CFF.toInt() else 0xFF9CA3AF.toInt())
+                setTextColor(if (currentTab == tab) 0xFF6F42C1.toInt() else 0xFF666666.toInt())
                 setOnClickListener { currentTab = tab; renderTab() }
             }
             bottomNav.addView(b, LinearLayout.LayoutParams(0, -1, 1f))
@@ -270,7 +284,7 @@ class MainActivity : AppCompatActivity() {
         playerFrame.visibility = View.GONE
         nowPlayingText.visibility = View.GONE
         val titleBar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        titleBar.addView(label("Home", 23, 0xFFF8FAFC.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        titleBar.addView(label("Home", 23, 0xFF0F0F0F.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
         val search = actionButton("⌕ Search")
         search.setOnClickListener { showSearchDialog() }
         titleBar.addView(search)
@@ -284,10 +298,10 @@ class MainActivity : AppCompatActivity() {
         thumbnailLoading.clear()
         val longVideos = videos.filter { !it.isPortrait }
         val shorts = videos.filter { it.isPortrait }
-        feed.addView(label("Videos", 20, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(12), 0, dp(8)) })
+        feed.addView(label("Videos", 20, 0xFF0F0F0F.toInt(), true).apply { setPadding(0, dp(12), 0, dp(8)) })
         if (longVideos.isEmpty()) feed.addView(message("No landscape videos found yet."))
         longVideos.take(40).forEach { feed.addView(feedVideoCard(it, false)) }
-        feed.addView(label("Shorts", 22, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(18), 0, dp(10)) })
+        feed.addView(label("Shorts", 22, 0xFF0F0F0F.toInt(), true).apply { setPadding(0, dp(18), 0, dp(10)) })
         if (shorts.isEmpty()) feed.addView(message("Portrait videos will appear here as Shorts."))
         shorts.take(40).chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
@@ -322,10 +336,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun feedVideoCard(video: LocalVideo, short: Boolean): View {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, dp(10)) }
-        val frame = FrameLayout(this).apply { setBackgroundColor(0xFF191923.toInt()) }
+        val frame = FrameLayout(this).apply { setBackgroundColor(0xFFEAEAEA.toInt()) }
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(0xFF252536.toInt())
+            setBackgroundColor(0xFFEFEFEF.toInt())
             contentDescription = video.title
             tag = video.id
         }
@@ -334,14 +348,14 @@ class MainActivity : AppCompatActivity() {
         val ratio = if (short) 0.68f else 1.78f
         card.addView(frame, LinearLayout.LayoutParams(-1, if (short) dp(225) else (resources.displayMetrics.widthPixels / ratio).toInt()))
         frame.setOnClickListener { if (short) openShortsPlayer(video) else openFullPlayer(video) }
-        val title = label(video.title, 14, 0xFFF8FAFC.toInt(), true).apply {
+        val title = label(video.title, 14, 0xFF0F0F0F.toInt(), true).apply {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(8), dp(7), dp(8), dp(2))
             setOnClickListener { if (short) openShortsPlayer(video) else openFullPlayer(video) }
         }
         card.addView(title)
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), 0, dp(6), 0) }
-        actions.addView(label("${formatDuration(video.durationMs)}  •  ${video.folder}", 10, 0xFF94A3B8.toInt()), LinearLayout.LayoutParams(0, dp(34), 1f))
+        actions.addView(label("${formatDuration(video.durationMs)}  •  ${video.folder}", 10, 0xFF666666.toInt()), LinearLayout.LayoutParams(0, dp(34), 1f))
         val like = actionButton(if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like")
         like.setOnClickListener { if (!likedIds.add(video.id)) likedIds.remove(video.id); saveSavedCollections(); like.text = if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like" }
         actions.addView(like)
@@ -435,6 +449,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun detachPlayerView() {
+        playerView.player = null
         (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
     }
 
@@ -445,6 +460,7 @@ class MainActivity : AppCompatActivity() {
         fullScreen = false
         currentVideo = video
         ensurePlayer()
+        startPlaybackService()
         player?.apply {
             volume = 1f
             repeatMode = Player.REPEAT_MODE_OFF
@@ -462,14 +478,18 @@ class MainActivity : AppCompatActivity() {
         detachPlayerView()
         playerFrame.removeAllViews()
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        playerView.player = player
+        playerView.requestLayout()
         playerFrame.visibility = View.VISIBLE
         root.removeAllViews()
         (playerFrame.parent as? android.view.ViewGroup)?.removeView(playerFrame)
         root.setPadding(0, 0, 0, 0)
-        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF09090F.toInt()) }
+        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFFFFFFFF.toInt()) }
+        watchPageContainer = page
         val videoHeight = (resources.displayMetrics.widthPixels * 9f / 16f).toInt()
         page.addView(playerFrame, LinearLayout.LayoutParams(-1, videoHeight))
         val scroll = ScrollView(this)
+        watchPageScroll = scroll
         val fullscreen = TextView(this).apply {
             text = "⛶"
             textSize = 23f
@@ -495,16 +515,16 @@ class MainActivity : AppCompatActivity() {
                 fullscreen.text = "⛶"
                 window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                 @Suppress("DEPRECATION")
-                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
             }
         }
         playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.END or Gravity.TOP).apply { setMargins(0, dp(8), dp(8), 0) })
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(18)) }
-        details.addView(label(video.title, 19, 0xFFF8FAFC.toInt(), true))
-        details.addView(label(formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes), 12, 0xFF9CA3AF.toInt()).apply { setPadding(0, dp(7), 0, dp(12)) })
+        details.addView(label(video.title, 19, 0xFF0F0F0F.toInt(), true))
+        details.addView(label(formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes), 12, 0xFF666666.toInt()).apply { setPadding(0, dp(7), 0, dp(12)) })
         val channelRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        channelRow.addView(label("●", 24, 0xFFB79CFF.toInt(), true))
-        channelRow.addView(label("  Local videos  •  VibePlayer", 14, 0xFFE5E7EB.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        channelRow.addView(label("●", 24, 0xFF6F42C1.toInt(), true))
+        channelRow.addView(label("  Local videos  •  VibePlayer", 14, 0xFF202020.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
         details.addView(channelRow)
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, dp(10)) }
         val like = actionButton(if (likedIds.contains(video.id)) "♥ Liked" else "♡ Like")
@@ -522,11 +542,11 @@ class MainActivity : AppCompatActivity() {
         actions.addView(later, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(5) })
         actions.addView(playlist, LinearLayout.LayoutParams(0, dp(44), 1f))
         details.addView(actions)
-        details.addView(label("Comments", 18, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(16), 0, dp(8)) })
-        details.addView(label("Comments are for your local viewing notes. This video is stored on your device.", 13, 0xFF9CA3AF.toInt()).apply { setPadding(dp(12), dp(14), dp(12), dp(14)); setBackgroundColor(0xFF171722.toInt()) })
-        details.addView(label("Up next", 19, 0xFFF8FAFC.toInt(), true).apply { setPadding(0, dp(18), 0, dp(8)) })
+        details.addView(label("Comments", 18, 0xFF0F0F0F.toInt(), true).apply { setPadding(0, dp(16), 0, dp(8)) })
+        details.addView(label("Comments are for your local viewing notes. This video is stored on your device.", 13, 0xFF666666.toInt()).apply { setPadding(dp(12), dp(14), dp(12), dp(14)); setBackgroundColor(0xFFF2F2F2.toInt()) })
+        details.addView(label("Up next", 19, 0xFF0F0F0F.toInt(), true).apply { setPadding(0, dp(18), 0, dp(8)) })
         videos.filter { it.id != video.id }.take(20).forEach { related ->
-            details.addView(videoRow(related, onVideoClick = { openFullPlayer(related) }))
+            details.addView(videoRow(related, onVideoClick = { playVideo(related) }))
         }
         scroll.addView(details)
         page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -537,6 +557,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun openShortsPlayer(video: LocalVideo) {
         saveCurrentPosition()
+        if (watchPageMode && currentVideo != null && currentVideo?.isPortrait == false) {
+            returnFromShortsVideo = currentVideo
+            returnFromShortsPosition = player?.currentPosition ?: 0L
+            returnFromShortsPlaying = player?.isPlaying == true
+        }
         shortsMode = true
         watchPageMode = false
         fullScreen = true
@@ -548,6 +573,7 @@ class MainActivity : AppCompatActivity() {
         playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         playerFrame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
         playerView.player = player
+        playerView.requestLayout()
         root.removeAllViews()
         root.setPadding(0, 0, 0, 0)
         root.addView(playerFrame, LinearLayout.LayoutParams(-1, -1))
@@ -577,6 +603,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END or Gravity.TOP))
+        addShortsActionRail(video)
+        installShortsGestures()
+        startPlaybackService()
         player?.apply {
             volume = 1f
             repeatMode = Player.REPEAT_MODE_ONE
@@ -589,7 +618,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun closeWatchPage() {
         saveCurrentPosition()
+        if (shortsMode && returnFromShortsVideo != null) {
+            val previous = returnFromShortsVideo!!
+            val position = returnFromShortsPosition
+            val resume = returnFromShortsPlaying
+            returnFromShortsVideo = null
+            shortsMode = false
+            watchPageMode = true
+            fullScreen = false
+            currentVideo = previous
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            ensurePlayer()
+            player?.apply {
+                repeatMode = Player.REPEAT_MODE_OFF
+                setMediaItem(MediaItem.fromUri(previous.uri))
+                prepare()
+                seekTo(position)
+                playWhenReady = resume
+            }
+            showWatchPage(previous)
+            return
+        }
         player?.pause()
+        stopPlaybackService()
+        returnFromShortsVideo = null
         shortsMode = false; watchPageMode = false; fullScreen = false
         requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
@@ -609,7 +664,98 @@ class MainActivity : AppCompatActivity() {
         root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(bottomNav, LinearLayout.LayoutParams(-1, dp(60)))
         currentTab = "Home"
+        watchPageContainer = null
+        watchPageScroll = null
         renderTab()
+    }
+
+
+    private fun addShortsActionRail(video: LocalVideo) {
+        val rail = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(5), dp(8), dp(5), dp(8)) }
+        fun railAction(icon: String, caption: String, click: () -> Unit) {
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+                setPadding(dp(4), dp(7), dp(4), dp(7)); isClickable = true; setOnClickListener { click() }
+            }
+            item.addView(TextView(this).apply { text = icon; textSize = 27f; gravity = Gravity.CENTER; setTextColor(0xFFFFFFFF.toInt()) })
+            item.addView(TextView(this).apply { text = caption; textSize = 11f; gravity = Gravity.CENTER; setTextColor(0xFFFFFFFF.toInt()) })
+            rail.addView(item)
+        }
+        railAction(if (likedIds.contains(video.id)) "♥" else "♡", "Like") {
+            if (!likedIds.add(video.id)) likedIds.remove(video.id)
+            saveSavedCollections()
+            Toast.makeText(this, if (likedIds.contains(video.id)) "Liked" else "Like removed", Toast.LENGTH_SHORT).show()
+        }
+        railAction("▢", "Comments") {
+            AlertDialog.Builder(this).setTitle("Local comments").setMessage("Comments are private viewing notes stored on this device.").setPositiveButton("OK", null).show()
+        }
+        railAction(if (watchLaterIds.contains(video.id)) "▣" else "＋", "Save") {
+            if (!watchLaterIds.add(video.id)) watchLaterIds.remove(video.id)
+            saveSavedCollections()
+            Toast.makeText(this, if (watchLaterIds.contains(video.id)) "Saved to Watch Later" else "Removed from Watch Later", Toast.LENGTH_SHORT).show()
+        }
+        railAction("↗", "Share") {
+            val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, video.title) }
+            startActivity(Intent.createChooser(send, "Share video title"))
+        }
+        playerFrame.addView(rail, FrameLayout.LayoutParams(dp(68), -2, Gravity.END or Gravity.CENTER_VERTICAL))
+        val info = TextView(this).apply {
+            text = video.title; textSize = 14f; maxLines = 2; setTextColor(0xFFFFFFFF.toInt())
+            setShadowLayer(5f, 1f, 1f, 0xFF000000.toInt())
+            setPadding(dp(14), dp(8), dp(78), dp(16))
+        }
+        playerFrame.addView(info, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+    }
+
+    private fun installShortsGestures() {
+        val shorts = videos.filter { it.isPortrait }
+        val startIndex = shorts.indexOfFirst { it.id == currentVideo?.id }
+        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                val start = e1 ?: return false
+                val dy = e2.y - start.y
+                if (kotlin.math.abs(dy) < dp(60) || kotlin.math.abs(velocityY) < dp(250)) return false
+                val next = if (dy < 0) startIndex + 1 else startIndex - 1
+                if (next in shorts.indices) openShortsPlayer(shorts[next])
+                return true
+            }
+        })
+        playerFrame.setOnTouchListener { _, event -> detector.onTouchEvent(event); false }
+    }
+
+    private fun startPlaybackService() {
+        if (playbackServiceStarted) return
+        try {
+            val intent = Intent(this, PlaybackKeepAliveService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+            playbackServiceStarted = true
+        } catch (_: Exception) { playbackServiceStarted = false }
+    }
+
+    private fun stopPlaybackService() {
+        if (!playbackServiceStarted) return
+        try { stopService(Intent(this, PlaybackKeepAliveService::class.java)) } catch (_: Exception) { }
+        playbackServiceStarted = false
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT >= 26 && (watchPageMode || shortsMode) && player?.isPlaying == true) {
+            try {
+                val ratio = if (shortsMode) Rational(9, 16) else Rational(16, 9)
+                enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(ratio).build())
+            } catch (_: Exception) { }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (watchPageMode) {
+            watchPageScroll?.visibility = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
+            playerFrame.layoutParams = if (isInPictureInPictureMode) LinearLayout.LayoutParams(-1, -1)
+                else LinearLayout.LayoutParams(-1, (resources.displayMetrics.widthPixels * 9f / 16f).toInt())
+        }
     }
 
     private fun loadSavedCollections() {
@@ -649,8 +795,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderChannels() {
-        content.addView(label("Your channels", 21, 0xFFF8FAFC.toInt(), true))
-        content.addView(label("Folders from your phone, organized like channels", 12, 0xFF94A3B8.toInt()))
+        content.addView(label("Your channels", 21, 0xFF0F0F0F.toInt(), true))
+        content.addView(label("Folders from your phone, organized like channels", 12, 0xFF666666.toInt()))
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(list)
@@ -667,7 +813,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderPlaylists() {
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label("Your playlists", 21, 0xFFF8FAFC.toInt(), true), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(label("Your playlists", 21, 0xFF0F0F0F.toInt(), true), LinearLayout.LayoutParams(0, dp(48), 1f))
         val create = actionButton("+ New")
         create.setOnClickListener { createPlaylist() }
         header.addView(create)
@@ -686,8 +832,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderLibrary() {
-        content.addView(label("Library", 21, 0xFFF8FAFC.toInt(), true))
-        content.addView(label("All videos stored on this device", 12, 0xFF94A3B8.toInt()))
+        content.addView(label("Library", 21, 0xFF0F0F0F.toInt(), true))
+        content.addView(label("All videos stored on this device", 12, 0xFF666666.toInt()))
         content.addView(cardRow("◷", "Watch Later", "${watchLaterIds.size} saved videos  •  Watch anytime") {
             showCollection("Watch Later", videos.filter { watchLaterIds.contains(it.id) })
         })
@@ -705,7 +851,7 @@ class MainActivity : AppCompatActivity() {
         val back = actionButton("‹ Back")
         back.setOnClickListener { renderTab() }
         header.addView(back)
-        header.addView(label(title, 18, 0xFFF8FAFC.toInt(), true), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(label(title, 18, 0xFF0F0F0F.toInt(), true), LinearLayout.LayoutParams(0, dp(48), 1f))
         val playAll = actionButton("▶ Play all")
         playAll.setOnClickListener { playCollection(items) }
         header.addView(playAll)
@@ -723,27 +869,27 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(9), dp(5), dp(9))
-            setBackgroundColor(0xFF13131D.toInt())
+            setBackgroundColor(0xFFF7F7F7.toInt())
             isClickable = true
             setOnClickListener { (onVideoClick ?: { openFullPlayer(video) }).invoke() }
         }
         val thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(0xFF28223B.toInt())
+            setBackgroundColor(0xFFEAEAEA.toInt())
             contentDescription = "Thumbnail: ${video.title}"
             tag = video.id
         }
         row.addView(thumb, LinearLayout.LayoutParams(dp(112), dp(72)))
         loadRowThumbnail(thumb, video)
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), 0, dp(4), 0) }
-        details.addView(label(video.title, 14, 0xFFF1F5F9.toInt(), true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END })
-        details.addView(label("${video.folder}  •  ${formatDuration(video.durationMs)}  •  ${formatSize(video.sizeBytes)}", 10, 0xFF94A3B8.toInt()))
+        details.addView(label(video.title, 14, 0xFF0F0F0F.toInt(), true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END })
+        details.addView(label("${video.folder}  •  ${formatDuration(video.durationMs)}  •  ${formatSize(video.sizeBytes)}", 10, 0xFF666666.toInt()))
         row.addView(details, LinearLayout.LayoutParams(0, -2, 1f))
         val menu = TextView(this).apply {
             text = "⋮"
             textSize = 24f
             gravity = Gravity.CENTER
-            setTextColor(0xFFCBD5E1.toInt())
+            setTextColor(0xFF444444.toInt())
             setOnClickListener { showVideoMenu(this, video) }
         }
         row.addView(menu, LinearLayout.LayoutParams(dp(38), dp(72)))
@@ -1052,12 +1198,12 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
-            setBackgroundColor(0xFF171722.toInt())
-            val symbol = label(icon, 23, 0xFFB79CFF.toInt(), true)
+            setBackgroundColor(0xFFF2F2F2.toInt())
+            val symbol = label(icon, 23, 0xFF6F42C1.toInt(), true)
             addView(symbol, LinearLayout.LayoutParams(dp(48), dp(48)))
             val textBox = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-            textBox.addView(label(title, 15, 0xFFF8FAFC.toInt(), true))
-            textBox.addView(label(subtitle, 11, 0xFF94A3B8.toInt()))
+            textBox.addView(label(title, 15, 0xFF0F0F0F.toInt(), true))
+            textBox.addView(label(subtitle, 11, 0xFF666666.toInt()))
             addView(textBox, LinearLayout.LayoutParams(0, -2, 1f))
             setOnClickListener { click() }
         }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) } }
@@ -1067,9 +1213,9 @@ class MainActivity : AppCompatActivity() {
         this.text = text
         textSize = 12f
         gravity = Gravity.CENTER
-        setTextColor(0xFFEDE9FE.toInt())
+        setTextColor(0xFF202020.toInt())
         setPadding(dp(12), dp(8), dp(12), dp(8))
-        setBackgroundColor(0xFF29213D.toInt())
+        setBackgroundColor(0xFFF1F1F1.toInt())
     }
 
     private fun label(text: String, size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
@@ -1082,7 +1228,7 @@ class MainActivity : AppCompatActivity() {
     private fun message(text: String) = TextView(this).apply {
         this.text = text
         textSize = 13f
-        setTextColor(0xFF94A3B8.toInt())
+        setTextColor(0xFF666666.toInt())
         gravity = Gravity.CENTER
         setPadding(dp(20), dp(28), dp(20), dp(28))
     }
@@ -1114,16 +1260,17 @@ class MainActivity : AppCompatActivity() {
         saveCurrentPosition()
         feedScroll?.let { prefs.edit().putInt("home_scroll_y", it.scrollY).apply() }
         super.onPause()
-        if (!fullScreen) player?.pause()
+        if (!fullScreen && !playbackServiceStarted && !isInPictureInPictureMode) player?.pause()
     }
 
     override fun onStop() {
         saveCurrentPosition()
         super.onStop()
-        if (!fullScreen) player?.pause()
+        if (!fullScreen && !playbackServiceStarted && !isInPictureInPictureMode) player?.pause()
     }
 
     override fun onDestroy() {
+        stopPlaybackService()
         playerView.player = null
         player?.release()
         player = null
