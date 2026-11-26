@@ -463,11 +463,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun detachPlayerView() {
-        playerView.player = null
+        // Keep the same ExoPlayer attached while moving the TextureView-backed PlayerView.
         (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
     }
 
-    private fun openFullPlayer(video: LocalVideo, queueItems: List<LocalVideo> = activeVideos.takeIf { it.isNotEmpty() } ?: videos) {
+    private fun openFullPlayer(video: LocalVideo, queueItems: List<LocalVideo> = videos) {
         saveCurrentPosition()
         shortsMode = false
         watchPageMode = true
@@ -628,7 +628,6 @@ class MainActivity : AppCompatActivity() {
         }
         playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END or Gravity.TOP))
         addShortsActionRail(video)
-        installShortsGestures()
         startPlaybackService()
         player?.apply {
             volume = 1f
@@ -815,7 +814,7 @@ class MainActivity : AppCompatActivity() {
         gestureHoldMode = side
         if (side > 0) {
             p.playWhenReady = true
-            p.setPlaybackSpeed(3f)
+            p.setPlaybackParameters(androidx.media3.common.PlaybackParameters(3f))
             Toast.makeText(this, "3× speed", Toast.LENGTH_SHORT).show()
         } else {
             gestureVolumeBeforeHold = p.volume
@@ -841,7 +840,7 @@ class MainActivity : AppCompatActivity() {
         gestureHoldRunnable?.let { mainHandler.removeCallbacks(it) }
         gestureHoldRunnable = null
         player?.let { p ->
-            if (mode > 0) p.setPlaybackSpeed(1f)
+            if (mode > 0) p.setPlaybackParameters(androidx.media3.common.PlaybackParameters(1f))
             else p.volume = gestureVolumeBeforeHold
         }
     }
