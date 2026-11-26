@@ -470,6 +470,8 @@ class MainActivity : AppCompatActivity() {
     private fun openFullPlayer(video: LocalVideo, queueItems: List<LocalVideo> = videos) {
         resetPlaybackHold()
         saveCurrentPosition()
+        val alreadyOnWatchPage = watchPageMode && !shortsMode &&
+            watchPageContainer != null && playerFrame.parent === watchPageContainer
         shortsMode = false
         watchPageMode = true
         fullScreen = false
@@ -488,7 +490,7 @@ class MainActivity : AppCompatActivity() {
         }
         playerView.useController = true
         playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-        if (watchPageContainer == null || !watchPageMode || playerFrame.parent == null) {
+        if (!alreadyOnWatchPage) {
             showWatchPage(video)
         } else {
             updateWatchPageVideoInfo(video)
