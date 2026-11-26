@@ -6,6 +6,7 @@
     android:layout_height="match_parent"
     android:background="#000000"
     app:surface_type="texture_view"
+    app:controller_layout_id="@layout/vibe_player_controls"
     app:use_controller="true"
     app:resize_mode="fit"
     app:show_buffering="when_playing"
