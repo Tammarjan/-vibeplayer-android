@@ -90,6 +90,15 @@ class MainActivity : AppCompatActivity() {
     private var playbackServiceStarted = false
     private var watchPageContainer: LinearLayout? = null
     private var watchPageScroll: ScrollView? = null
+    private var watchPageTitleView: TextView? = null
+    private var watchPageMetaView: TextView? = null
+    private var gestureHoldMode: Int = 0
+    private var gestureHoldRunnable: Runnable? = null
+    private var seekBurstSide: Int = 0
+    private var seekBurstCount: Int = 0
+    private var seekBurstReset: Runnable? = null
+    private var gestureDetector: GestureDetector? = null
+    private var gestureVolumeBeforeHold: Float = 1f
     private val prefs by lazy { getSharedPreferences("vibe_library", MODE_PRIVATE) }
 
     private val permissionLauncher =
@@ -224,6 +233,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(0xFF000000.toInt())
             controllerShowTimeoutMs = 3500
         }
+        installPlaybackGestures()
         playerFrame = FrameLayout(this).apply {
             setBackgroundColor(0xFF15151F.toInt())
             addView(playerView, FrameLayout.LayoutParams(-1, -1))
@@ -457,7 +467,7 @@ class MainActivity : AppCompatActivity() {
         (playerView.parent as? android.view.ViewGroup)?.removeView(playerView)
     }
 
-    private fun openFullPlayer(video: LocalVideo) {
+    private fun openFullPlayer(video: LocalVideo, queueItems: List<LocalVideo> = activeVideos.takeIf { it.isNotEmpty() } ?: videos) {
         saveCurrentPosition()
         shortsMode = false
         watchPageMode = true
@@ -466,17 +476,22 @@ class MainActivity : AppCompatActivity() {
         if (!video.isPortrait) lastLandscapeVideo = video
         ensurePlayer()
         startPlaybackService()
+        val queue = queueItems.ifEmpty { listOf(video) }
+        val startIndex = queue.indexOfFirst { it.id == video.id }.takeIf { it >= 0 } ?: 0
         player?.apply {
             volume = 1f
             repeatMode = Player.REPEAT_MODE_OFF
-            setMediaItem(MediaItem.fromUri(video.uri))
+            setMediaItems(queue.map { MediaItem.fromUri(it.uri) }, startIndex, resumePositions[video.id] ?: 0L)
             prepare()
-            seekTo(resumePositions[video.id] ?: 0L)
             playWhenReady = true
         }
         playerView.useController = true
         playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-        showWatchPage(video)
+        if (watchPageContainer == null || !watchPageMode || playerFrame.parent == null) {
+            showWatchPage(video)
+        } else {
+            updateWatchPageVideoInfo(video)
+        }
     }
 
     private fun showWatchPage(video: LocalVideo) {
@@ -525,8 +540,10 @@ class MainActivity : AppCompatActivity() {
         }
         playerFrame.addView(fullscreen, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.END or Gravity.TOP).apply { setMargins(0, dp(8), dp(8), 0) })
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(18)) }
-        details.addView(label(video.title, 19, 0xFF0F0F0F.toInt(), true))
-        details.addView(label(formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes), 12, 0xFF666666.toInt()).apply { setPadding(0, dp(7), 0, dp(12)) })
+        watchPageTitleView = label(video.title, 19, 0xFF0F0F0F.toInt(), true)
+        details.addView(watchPageTitleView)
+        watchPageMetaView = label(formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes), 12, 0xFF666666.toInt()).apply { setPadding(0, dp(7), 0, dp(12)) }
+        details.addView(watchPageMetaView)
         val channelRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         channelRow.addView(label("●", 24, 0xFF6F42C1.toInt(), true))
         channelRow.addView(label("  Local videos  •  VibePlayer", 14, 0xFF202020.toInt(), true), LinearLayout.LayoutParams(0, dp(42), 1f))
@@ -678,6 +695,8 @@ class MainActivity : AppCompatActivity() {
         currentTab = "Home"
         watchPageContainer = null
         watchPageScroll = null
+        watchPageTitleView = null
+        watchPageMetaView = null
         renderTab()
     }
 
@@ -721,19 +740,110 @@ class MainActivity : AppCompatActivity() {
 
     private fun installShortsGestures() {
         val shorts = videos.filter { it.isPortrait }
-        val startIndex = shorts.indexOfFirst { it.id == currentVideo?.id }
         val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent): Boolean = true
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
                 val start = e1 ?: return false
                 val dy = e2.y - start.y
                 if (kotlin.math.abs(dy) < dp(60) || kotlin.math.abs(velocityY) < dp(250)) return false
-                val next = if (dy < 0) startIndex + 1 else startIndex - 1
+                val currentIndex = shorts.indexOfFirst { it.id == currentVideo?.id }
+                val next = if (dy < 0) currentIndex + 1 else currentIndex - 1
                 if (next in shorts.indices) openShortsPlayer(shorts[next])
                 return true
             }
         })
         playerView.setOnTouchListener { _, event -> detector.onTouchEvent(event); false }
+    }
+
+
+    private fun installPlaybackGestures() {
+        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (!watchPageMode && !shortsMode) return false
+                if (e.y > playerView.height - dp(92)) return false
+                val side = if (e.x < playerView.width / 2f) 1 else -1
+                if (seekBurstSide != side) {
+                    seekBurstSide = side
+                    seekBurstCount = 0
+                }
+                seekBurstCount++
+                val delta = seekBurstCount * 5_000L
+                val p = player ?: return true
+                val target = if (side > 0) p.currentPosition + delta else p.currentPosition - delta
+                val duration = p.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                p.seekTo(target.coerceIn(0L, duration))
+                seekBurstReset?.let { mainHandler.removeCallbacks(it) }
+                seekBurstReset = Runnable { seekBurstSide = 0; seekBurstCount = 0 }
+                mainHandler.postDelayed(seekBurstReset!!, 700)
+                return true
+            }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (!watchPageMode && !shortsMode) return
+                if (e.y > playerView.height - dp(92)) return
+                val side = if (e.x < playerView.width / 2f) 1 else -1
+                beginPlaybackHold(side)
+            }
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (!shortsMode) return false
+                val start = e1 ?: return false
+                val dy = e2.y - start.y
+                if (kotlin.math.abs(dy) < dp(60) || kotlin.math.abs(velocityY) < dp(250)) return false
+                val shorts = videos.filter { it.isPortrait }
+                val currentIndex = shorts.indexOfFirst { it.id == currentVideo?.id }
+                val next = if (dy < 0) currentIndex + 1 else currentIndex - 1
+                if (next in shorts.indices) openShortsPlayer(shorts[next])
+                return true
+            }
+        })
+        gestureDetector = detector
+        playerView.setOnTouchListener { _, event ->
+            detector.onTouchEvent(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> resetPlaybackHold()
+            }
+            false
+        }
+    }
+
+    private fun beginPlaybackHold(side: Int) {
+        if (gestureHoldMode != 0) return
+        val p = player ?: return
+        gestureHoldMode = side
+        if (side > 0) {
+            p.playWhenReady = true
+            p.setPlaybackSpeed(3f)
+            Toast.makeText(this, "3× speed", Toast.LENGTH_SHORT).show()
+        } else {
+            gestureVolumeBeforeHold = p.volume
+            p.volume = 0f
+            val reverse = object : Runnable {
+                override fun run() {
+                    if (gestureHoldMode != -1 || player !== p) return
+                    val next = (p.currentPosition - 150L).coerceAtLeast(0L)
+                    p.seekTo(next)
+                    mainHandler.postDelayed(this, 50L)
+                }
+            }
+            gestureHoldRunnable = reverse
+            mainHandler.post(reverse)
+            Toast.makeText(this, "3× reverse", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun resetPlaybackHold() {
+        val mode = gestureHoldMode
+        if (mode == 0) return
+        gestureHoldMode = 0
+        gestureHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+        gestureHoldRunnable = null
+        player?.let { p ->
+            if (mode > 0) p.setPlaybackSpeed(1f)
+            else p.volume = gestureVolumeBeforeHold
+        }
     }
 
     private fun startPlaybackService() {
@@ -872,7 +982,7 @@ class MainActivity : AppCompatActivity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(list)
         content.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        items.forEach { list.addView(videoRow(it)) }
+        items.forEach { item -> list.addView(videoRow(item, onVideoClick = { activeVideos = items; openFullPlayer(item, items) })) }
         if (items.isEmpty()) list.addView(message("This collection is empty. Add videos from the Library menu."))
     }
 
@@ -1022,6 +1132,11 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().putString("playlists", json.toString()).apply()
     }
 
+    private fun updateWatchPageVideoInfo(video: LocalVideo) {
+        watchPageTitleView?.text = video.title
+        watchPageMetaView?.text = formatDuration(video.durationMs) + "  •  " + video.folder + "  •  " + formatSize(video.sizeBytes)
+    }
+
     private fun ensurePlayer() {
         if (player != null) return
         val renderersFactory = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
@@ -1029,6 +1144,13 @@ class MainActivity : AppCompatActivity() {
             playerView.player = exo
             exo.addListener(object : Player.Listener {
                 override fun onAudioSessionIdChanged(audioSessionId: Int) { attachEqualizer(audioSessionId) }
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val uri = mediaItem?.localConfiguration?.uri ?: return
+                    val changed = videos.firstOrNull { it.uri == uri } ?: activeVideos.firstOrNull { it.uri == uri } ?: return
+                    currentVideo = changed
+                    if (!changed.isPortrait) lastLandscapeVideo = changed
+                    updateWatchPageVideoInfo(changed)
+                }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     mainHandler.post {
                         player?.playWhenReady = false
@@ -1050,6 +1172,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun playCollection(items: List<LocalVideo>) {
         if (items.isEmpty()) return
+        activeVideos = items
         ensurePlayer()
         currentVideo = items.first()
         player?.apply {
@@ -1283,6 +1406,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         stopPlaybackService()
+        resetPlaybackHold()
         playerView.player = null
         player?.release()
         player = null
