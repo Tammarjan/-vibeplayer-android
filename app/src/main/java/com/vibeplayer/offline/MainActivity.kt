@@ -84,6 +84,9 @@ class MainActivity : AppCompatActivity() {
     private var returnFromShortsVideo: LocalVideo? = null
     private var returnFromShortsPosition: Long = 0L
     private var returnFromShortsPlaying: Boolean = false
+    private var lastLandscapeVideo: LocalVideo? = null
+    private var lastLandscapePosition: Long = 0L
+    private var lastLandscapeShouldResume: Boolean = false
     private var playbackServiceStarted = false
     private var watchPageContainer: LinearLayout? = null
     private var watchPageScroll: ScrollView? = null
@@ -459,6 +462,7 @@ class MainActivity : AppCompatActivity() {
         watchPageMode = true
         fullScreen = false
         currentVideo = video
+        if (!video.isPortrait) lastLandscapeVideo = video
         ensurePlayer()
         startPlaybackService()
         player?.apply {
@@ -557,10 +561,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun openShortsPlayer(video: LocalVideo) {
         saveCurrentPosition()
-        if (watchPageMode && currentVideo != null && currentVideo?.isPortrait == false) {
-            returnFromShortsVideo = currentVideo
-            returnFromShortsPosition = player?.currentPosition ?: 0L
-            returnFromShortsPlaying = player?.isPlaying == true
+        feedScroll?.let { prefs.edit().putInt("home_scroll_y", it.scrollY).apply() }
+        val previousLong = if (watchPageMode && currentVideo?.isPortrait == false) currentVideo else lastLandscapeVideo
+        if (previousLong != null) {
+            returnFromShortsVideo = previousLong
+            returnFromShortsPosition = if (watchPageMode) player?.currentPosition ?: lastLandscapePosition else lastLandscapePosition
+            returnFromShortsPlaying = if (watchPageMode) player?.isPlaying == true else lastLandscapeShouldResume
         }
         shortsMode = true
         watchPageMode = false
@@ -641,6 +647,11 @@ class MainActivity : AppCompatActivity() {
             }
             showWatchPage(previous)
             return
+        }
+        if (!shortsMode && currentVideo?.isPortrait == false) {
+            lastLandscapeVideo = currentVideo
+            lastLandscapePosition = player?.currentPosition ?: lastLandscapePosition
+            lastLandscapeShouldResume = player?.isPlaying == true
         }
         player?.pause()
         stopPlaybackService()
