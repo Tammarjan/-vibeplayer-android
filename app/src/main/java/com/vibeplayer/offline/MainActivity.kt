@@ -482,6 +482,10 @@ class MainActivity : AppCompatActivity() {
         val queue = queueItems.ifEmpty { listOf(video) }
         val startIndex = queue.indexOfFirst { it.id == video.id }.takeIf { it >= 0 } ?: 0
         player?.apply {
+            // Fully release the previous item's decoder before installing the next queue.
+            playWhenReady = false
+            stop()
+            clearMediaItems()
             volume = 1f
             repeatMode = Player.REPEAT_MODE_OFF
             setMediaItems(queue.map { MediaItem.fromUri(it.uri) }, startIndex, resumePositions[video.id] ?: 0L)
@@ -634,6 +638,9 @@ class MainActivity : AppCompatActivity() {
         addShortsActionRail(video)
         startPlaybackService()
         player?.apply {
+            playWhenReady = false
+            stop()
+            clearMediaItems()
             volume = 1f
             repeatMode = Player.REPEAT_MODE_ALL
             val shortsQueue = videos.filter { it.isPortrait }.ifEmpty { listOf(video) }
@@ -661,6 +668,9 @@ class MainActivity : AppCompatActivity() {
             window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
             ensurePlayer()
             player?.apply {
+                playWhenReady = false
+                stop()
+                clearMediaItems()
                 repeatMode = Player.REPEAT_MODE_OFF
                 setMediaItem(MediaItem.fromUri(previous.uri))
                 prepare()
